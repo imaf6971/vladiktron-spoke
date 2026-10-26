@@ -30,6 +30,15 @@ void uc_m68k_kick(uc_engine *uc);
 #define MIDI_BYTE_US 320.0           // one byte at 31250 baud (10 bits)
 #define UART9 0xEC074000u            // MIDI IN / OUT
 #define USB 0xFC0B0000u              // USB OTG controller, device mode (ChipIdea/EHCI style)
+// Power: the power key is port A pin data (0xEC094018) bit 2, 1 = pressed. (Bit 3 next to it is the battery
+// sense, 1 = on battery, read at 0x40053242; it stays 0, on mains, so the OS never takes its low-battery
+// shutdown.) The OS polls the key at 0x400538a2 (a timer task set up at 0x40005558). Once it has seen the key
+// released and then held for 13 polls (threshold set at 0x40007f7c, kept at 0x4013e760), it shows "Shutting
+// down..." and calls its power-off routine 0x400e1e0e. That runs the registered shutdown handlers (table
+// 0x40a74578; they save the working state to the +Drive), masks interrupts, clears port C bit 2 (the power
+// latch) and spins at 0x400e1e38 for good.
+#define PORTA_POWER_KEY 0x04
+#define POWER_OFF_SPIN 0x400e1e38u
 
 // ---------------------------------------------------------------- small helpers
 static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
@@ -171,6 +180,9 @@ struct mcboard {
         uint64_t n_in, n_out;
     } usb;
 
+    // power: key held (thread-safe), the OS has powered off (reached POWER_OFF_SPIN)
+    atomic_int power_key, powered_off;
+
     // run control / outputs
     atomic_int stop;
     atomic_int running;                     // a slice is executing (watchdog kicks it)
@@ -180,7 +192,7 @@ struct mcboard {
     uint64_t screen_gen;
     double next_screen;
     char fault[256];
-    uint64_t n_irq[256], n_cmd, n_rd, n_wr, n_erase;
+    uint64_t n_irq[256], n_cmd, n_rd, n_wr, n_erase, n_emmc_err;
 };
 
 static uint8_t *io_ptr(mcboard *b, uint32_t a) {
@@ -297,11 +309,17 @@ static void timers_service(mcboard *b, double t) {
 }
 
 // ---------------------------------------------------------------- SPI flash (EN25QH16) on DSPI0
-static void flash_save(mcboard *b) {
-    if (!b->flash.dirty) return;
-    FILE *f = fopen(b->flash.path, "wb");
-    if (f) { fwrite(b->flash.mem, 1, b->flash.size, f); fclose(f); }
-    b->flash.dirty = 0;
+static void flash_save(mcboard *b) {                         // whole image, swapped in atomically: a quit or
+    if (!b->flash.dirty) return;                             // crash mid-save never leaves a torn flash.bin
+    char tmp[1100];
+    snprintf(tmp, sizeof tmp, "%s.tmp", b->flash.path);
+    FILE *f = fopen(tmp, "wb");
+    if (!f) return;
+    int ok = fwrite(b->flash.mem, 1, b->flash.size, f) == b->flash.size;
+    ok &= fflush(f) == 0 && fsync(fileno(f)) == 0;
+    ok &= fclose(f) == 0;
+    if (ok && rename(tmp, b->flash.path) == 0) b->flash.dirty = 0;
+    else { fprintf(stderr, "[flash] could not save %s\n", b->flash.path); unlink(tmp); }
 }
 static uint8_t flash_xfer(spiflash *s, uint8_t v) {
     if (s->cmd < 0) {
@@ -336,6 +354,17 @@ static uint8_t flash_xfer(spiflash *s, uint8_t v) {
 }
 
 // ---------------------------------------------------------------- eMMC card (Samsung "4FTE4R")
+// MCB_EMMCLOG=1 logs every command; storage errors (see emmc_error) are always logged.
+static int emmc_log(void) { static int v = -1; if (v < 0) v = getenv("MCB_EMMCLOG") != NULL; return v; }
+static void emmc_error(mcboard *b, const char *what, int idx, uint32_t arg) {
+    b->n_emmc_err++;
+    fprintf(stderr, "[emmc] error: %s (CMD%d, arg %08x)\n", what, idx, arg);
+}
+static int emmc_in_range(mcboard *b, int idx, uint32_t arg, size_t n) {
+    if ((uint64_t)arg + (n + 511) / 512 <= EMMC_SECTORS) return 1;
+    emmc_error(b, "beyond the end of the card", idx, arg);
+    return 0;
+}
 static void emmc_save_ext(emmc *c) {
     FILE *f = fopen(c->ext_path, "wb");
     if (f) { fwrite(c->ext, 1, 512, f); fclose(f); }
@@ -379,6 +408,7 @@ static int emmc_command(mcboard *b, int idx, uint32_t arg, int data, uint32_t rs
     emmc *c = &b->card;
     memset(rsp, 0, 16);
     b->n_cmd++;
+    if (emmc_log()) fprintf(stderr, "[emmc] CMD%d %08x%s\n", idx, arg, data ? " +data" : "");
     switch (idx) {
     case 0: return 1;
     case 1: rsp[0] = 0xC0FF8080; return 1;                   // OCR: ready, sector addressing
@@ -408,10 +438,10 @@ static void emmc_read(mcboard *b, int idx, uint32_t arg, uint8_t *out, size_t n)
     uint8_t *tmp = calloc(1, n + 4);
     if (idx == 8) {
         memcpy(tmp, c->ext, n < 512 ? n : 512);
-    } else if (idx == 17 || idx == 18) {
+    } else if ((idx == 17 || idx == 18) && emmc_in_range(b, idx, arg, n)) {
         fseeko(c->f, (off_t)arg * 512, SEEK_SET);
-        size_t got = fread(tmp, 1, n, c->f);
-        (void)got;
+        size_t got = fread(tmp, 1, n, c->f);                 // short only past the end of a sparse image: zeros
+        if (got < n && ferror(c->f)) { emmc_error(b, "image read failed", idx, arg); clearerr(c->f); }
         b->n_rd += n / 512;
     }
     if (idx == 14) {                                         // BUS_TEST_R: inverted pattern, host order already
@@ -428,11 +458,11 @@ static void emmc_write(mcboard *b, int idx, uint32_t arg, const uint8_t *in, siz
         memcpy(c->bus_test, in, c->bus_test_len);
         return;
     }
-    if (idx == 24 || idx == 25) {
+    if ((idx == 24 || idx == 25) && emmc_in_range(b, idx, arg, n)) {
         uint8_t *tmp = malloc(n);
         swap32_copy(tmp, in, n);
         fseeko(c->f, (off_t)arg * 512, SEEK_SET);
-        fwrite(tmp, 1, n, c->f);
+        if (fwrite(tmp, 1, n, c->f) != n) { emmc_error(b, "image write failed", idx, arg); clearerr(c->f); }
         free(tmp);
         b->n_wr += n / 512;
     }
@@ -502,6 +532,7 @@ static void sd_command(mcboard *b, uint32_t x) {
     uint32_t blk = io_get(b, SD + 0x04, 4), arg = io_get(b, SD + 0x08, 4);
     int nblk = blk >> 16 ? (int)(blk >> 16) : 1, bsize = blk & 0x1FFF;
     if (!emmc_command(b, idx, arg, data, b->sd_rsp)) {
+        emmc_error(b, "command not answered", idx, arg);     // (the OS's driver never sends one in normal use)
         b->sd_irq |= 1u << 16;                               // CTOE
         sd_line(b);
         return;
@@ -596,6 +627,7 @@ static uint64_t mmio_read(uc_engine *uc, uint64_t off, unsigned size, void *user
         int n = a - 0xEC094018u;
         uint8_t v = b->gpio_out[n];
         if (n == 2) v = (v & ~0x08) | ((b->gpio_out[3] & 0x10) ? 0x08 : 0);   // board link (0x4008a7d4)
+        if (n == 0) v = (v & ~PORTA_POWER_KEY) | (atomic_load(&b->power_key) ? PORTA_POWER_KEY : 0);
         return v;
     }
     if (a >= USB + 0x080 && a < USB + 0x200 && size == 4) return usb_reg_read(b, a - USB);
@@ -770,6 +802,16 @@ static void on_render_done(uc_engine *uc, uint64_t addr, uint32_t size, void *us
     usb_microframes(b, t, 0);                               // USB audio packets, as evenly as the audio blocks
     dma50_check(b, t);
     usb_microframes(b, t, 0);
+}
+
+// The OS has run its power-off routine to the end (see POWER_OFF_SPIN): its last writes are done and it will
+// never run again, so the run ends here as it would when the power goes.
+static void on_power_off(uc_engine *uc, uint64_t addr, uint32_t size, void *user) {
+    mcboard *b = user;
+    (void)addr; (void)size;
+    if (atomic_exchange(&b->powered_off, 1)) return;
+    atomic_store(&b->stop, 1);
+    uc_emu_stop(uc);
 }
 
 // MCB_MIDILOG: each byte the OS's receive interrupt hands to its MIDI parser (0x400012cc).
@@ -1361,6 +1403,7 @@ mcboard *mcb_create(const uint8_t *os, size_t len, const char *flash_path, const
     uc_mmio_map(b->uc, 0x8C000000, 0x10000, fp_read, b, fp_write, b);   // front panel latches (FlexBus)
     uc_hook h;
     uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_render_done, b, 0x400593e2, 0x400593e2);
+    uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_power_off, b, POWER_OFF_SPIN, POWER_OFF_SPIN);
     if (getenv("MCB_MIDILOG")) uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_midi_byte, b, 0x400012cc, 0x400012cc);
     uc_hook_add(b->uc, &h, UC_HOOK_MEM_UNMAPPED, (void *)on_unmapped, b, 1, 0);
 
@@ -1382,7 +1425,7 @@ void mcb_destroy(mcboard *b) {
     if (!b) return;
     if (b->uc) uc_close(b->uc);
     if (b->flash.mem) flash_save(b);
-    if (b->card.f) fclose(b->card.f);
+    if (b->card.f) { fflush(b->card.f); fsync(fileno(b->card.f)); fclose(b->card.f); }
     free(b->flash.mem);
     free((void *)b->flash.path);
     free(b->afifo);
@@ -1417,6 +1460,7 @@ static void *watchdog_main(void *arg) {
 
 int mcb_run(mcboard *b, double seconds) {
     double end = seconds > 0 ? now_us() + seconds * 1e6 : 0;
+    if (atomic_load(&b->powered_off)) return 0;              // powered off: nothing runs any more
     atomic_store(&b->stop, 0);
     pthread_create(&b->watchdog, NULL, watchdog_main, b);
     uint32_t pc;
@@ -1455,6 +1499,10 @@ void mcb_stop(mcboard *b) {
     atomic_store(&b->stop, 1);
     uc_m68k_kick(b->uc);
 }
+
+void mcb_power_key(mcboard *b, int down) { atomic_store(&b->power_key, down ? 1 : 0); }
+int mcb_powered_off(mcboard *b) { return atomic_load(&b->powered_off); }
+uint64_t mcb_emmc_errors(mcboard *b) { return b->n_emmc_err; }
 
 // raw encoder index for each OS encoder number (inverse of the table at 0x4010ae1c)
 static const int enc_raw[17] = {-1, 3, 12, 0, 1, 2, 13, 4, 5, 6, 14, 8, 9, 10, 7, 11, 15};
@@ -1611,9 +1659,10 @@ void mcb_status(mcboard *b, char *out, size_t len) {
     uint32_t pc, sr;
     uc_reg_read(b->uc, UC_M68K_REG_PC, &pc);
     uc_reg_read(b->uc, UC_M68K_REG_SR, &sr);
-    snprintf(out, len, "t=%.1fs pc=%08x sr=%04x audio blocks=%llu midi in/out=%llu/%llu usb=%d (midi %llu/%llu, audio out/in %llu/%llu, short %llu, fb %.4f) panel reads=%llu irq=L%d/v%d emmc: %llu cmds, %llu read, %llu written, %llu erases%s%s",
+    snprintf(out, len, "t=%.1fs pc=%08x sr=%04x audio blocks=%llu midi in/out=%llu/%llu usb=%d (midi %llu/%llu, audio out/in %llu/%llu, short %llu, fb %.4f) panel reads=%llu irq=L%d/v%d emmc: %llu cmds, %llu read, %llu written, %llu erases, %llu errors%s%s%s",
              (now_us() - b->t0) / 1e6, pc, sr & 0xFFFF, (unsigned long long)b->n_blocks, (unsigned long long)b->n_midi_in, (unsigned long long)b->n_midi_out, mcb_usb_state(b), (unsigned long long)b->usb.n_in, (unsigned long long)b->usb.n_out,
              (unsigned long long)b->usb.n_cap, (unsigned long long)b->usb.n_play, (unsigned long long)b->usb.n_play_short, b->usb.fb, (unsigned long long)b->n_fp_reads, b->irq_level, b->irq_vector,
              (unsigned long long)b->n_cmd, (unsigned long long)b->n_rd, (unsigned long long)b->n_wr,
-             (unsigned long long)b->n_erase, b->fault[0] ? " FAULT: " : "", b->fault);
+             (unsigned long long)b->n_erase, (unsigned long long)b->n_emmc_err, atomic_load(&b->powered_off) ? " POWERED OFF" : "",
+             b->fault[0] ? " FAULT: " : "", b->fault);
 }

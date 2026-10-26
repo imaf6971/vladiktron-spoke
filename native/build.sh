@@ -2,7 +2,7 @@
 # Builds the Model:Cycles virtual board and the Mac app from scratch.
 #   ./build.sh [path/to/model-cycles_OS1.13.syx]
 # Needs: git, python3, cmake, ninja, pkg-config, Xcode command line tools.
-# Produces: build/main_os.bin + build/flash.bin (decoded from your .syx), ./mcbench, ./mcboot, ./mcaudio_test, ./mcmidi_test, ./mcusb_test,
+# Produces: build/main_os.bin + build/flash.bin (decoded from your .syx), ./mcbench, ./mcboot, ./mcaudio_test, ./mcmidi_test, ./mcusb_test, ./mcshutdown_test,
 #           build/Model Mac.app, and installs the firmware files into ~/Library/Application Support/ModelMac.
 set -e
 cd "$(dirname "$0")"
@@ -38,6 +38,7 @@ cc $CFLAGS mcboard.c mcboot.c $LIBS -o mcboot
 cc $CFLAGS mcboard.c mcaudio_test.c $LIBS -o mcaudio_test
 cc $CFLAGS mcboard.c mcmidi_test.c $LIBS -o mcmidi_test
 cc $CFLAGS mcboard.c mcusb_test.c $LIBS -o mcusb_test
+cc $CFLAGS mcboard.c mcshutdown_test.c $LIBS -o mcshutdown_test
 
 # 4. Mac app
 cc $CFLAGS -c mcboard.c -o build/obj/mcboard.o
@@ -49,9 +50,11 @@ swiftc -O -parse-as-library -import-objc-header mcboard.h app/*.swift build/obj/
     $UC/build/libunicorn.a -lz -o "$APP/Contents/MacOS/ModelMac"
 codesign --force -s - "$APP" 2> /dev/null
 
-# 5. Firmware files for the app (your own, never inside the bundle). Existing flash/eMMC state is kept.
+# 5. Firmware files for the app (your own, never inside the bundle). Existing flash/eMMC state is kept;
+#    flash.factory.bin is the untouched image the app's Factory reset goes back to.
 DATA="$HOME/Library/Application Support/ModelMac"
 mkdir -p "$DATA"
 cp build/main_os.bin "$DATA/main_os.bin"
+cp build/flash.bin "$DATA/flash.factory.bin"
 [ -f "$DATA/flash.bin" ] || cp build/flash.bin "$DATA/flash.bin"
 echo "built ./mcbench, ./mcboot and build/Model Mac.app (data: $DATA)"

@@ -2,7 +2,9 @@
 
 State on 2026-10-26: the Model:Cycles OS 1.13 boots and runs in real time. The screen, keys, knobs, pads, LEDs and
 audio out all work. So do MIDI over the TRS jacks and over USB (as CoreMIDI ports), USB audio both ways (routed to
-Mac audio devices), and an Arturia MiniLab 3 can play it. Everything below is still open, ordered by how much it blocks a release.
+Mac audio devices), and an Arturia MiniLab 3 can play it. Quitting is a clean power-off through the OS's own power-key
+path (`mcshutdown_test` checks that the project survives it), and the app menu has Reset +Drive, Factory reset and
+Reveal Data Folder. Everything below is still open, ordered by how much it blocks a release.
 
 ## 1. Release blockers
 
@@ -25,12 +27,6 @@ Mac audio devices), and an Arturia MiniLab 3 can play it. Everything below is st
   and installs `main_os.bin` and `flash.bin` itself. That means porting the decoder to C or Swift (see licensing).
 - Check the file is OS 1.13, by its version string and SHA-256 of the sections. Refuse anything else with a clear
   message: every address in `mcboard.c` is specific to 1.13.
-
-### Clean shutdown
-- Quitting stops the CPU wherever it is. If the OS was halfway through writing a project to the +Drive, the
-  `emmc.img` can be left inconsistent. On quit, run the OS's own power-off path (the "Shutting down..." window) and
-  wait for its last eMMC write. Then flush and close.
-- Offer "Reset +Drive" and "Factory reset" in a menu, instead of "delete emmc.img and .extcsd" in the README.
 
 ### Signing and distribution
 - Proper bundle ID, Developer ID signing, hardened runtime and notarisation. Unicorn's JIT needs
@@ -103,8 +99,11 @@ sample for sample. What remains:
 
 ### App and UI
 - **Settings window:** audio device, MIDI port names, controller mapping, USB connected / unplugged.
-- **Menus:** Reset, Factory reset, Reset +Drive, Reveal data folder, About (licences), Help (keyboard, mouse and
-  MiniLab controls).
+- **Menus:** Reset (a power cycle), About (licences), Help (keyboard, mouse and MiniLab controls). Reset +Drive,
+  Factory reset and Reveal Data Folder are done; their dialogs have not been clicked through in a scripted test yet.
+- **Quitting takes about 2 s** (the OS needs the power key held for 13 polls before it shuts down). It could be shorter
+  by setting the OS's own "power off now" flag (0x40a74560, set at 0x4005398c and checked at 0x400538f4), which
+  skips the wait. That would mean writing OS memory instead of pressing a key.
 - **Window:** scaling and full-screen behaviour, a check on how the panel looks at small sizes, VoiceOver labels for
   the controls.
 - **Status line.** The new bottom-edge status line (USB · controller) needs a design pass.
@@ -112,8 +111,12 @@ sample for sample. What remains:
 ## 3. Hardware details still approximate
 - **Pad velocity and pressure** come from a single ADC level per pad, harder toward its centre. Compare with the
   real pads' curve.
-- **Power, battery and headphone detect.** The power button, battery level (Config → Battery), auto-off and
-  headphone detect are not modelled. Check what the OS shows for them, and make the battery read "on mains".
+- **Power, battery and headphone detect.** The power key is modelled (port A bit 2, polled at 0x400538a2), and
+  the battery sense (port A bit 3) reads "on mains". Battery level (Config → Battery, ADC at 0x422ff164),
+  auto-off and headphone detect are not modelled. On battery with a low reading, the OS takes its low-battery
+  shutdown (state 10 from 0x400530ca, the ShutdownNotificationWindow at 0x4003ea34).
+- **DMA timer prescaler.** `dtim_program` ignores DTMR's clock select. DMA timer 3 (the BatteryHandler tick, set up
+  at 0x4003eb26 with internal clock / 16) therefore fires every 2 ms instead of every 33 ms.
 - **Untouched peripherals.** Anything the OS touches that the board does not model only reads back what was last
   written. A full run of every menu page, with `on_unmapped` faults logged, should show nothing new.
 - **USB edge cases.** USB is modelled for the high-speed device path only. Suspend/resume, stalls and halts, and
@@ -123,9 +126,11 @@ sample for sample. What remains:
 - **Automated checks.** `mcusb_test` already passes or fails. Turn `mcaudio_test`, `mcmidi_test` and the panel
   tests into checks like it (exact expectations, not printed numbers), run on every build, plus a one-hour soak test (audio underruns, eMMC
   integrity, memory).
-- **Save and load.** Create, save, reload and delete projects; reboot and check they survive.
+- **Save and load.** `mcshutdown_test` checks that the working project survives a clean power-off. Still open:
+  saving, reloading and deleting projects through the project menu, and checking that each survives a reboot.
+- **Test images.** `mcmidi_test` and `mcaudio_test` assume the OS is ready 6 s after boot. On an image left by a hard
+  stop, the next boot takes longer, so give them a fresh or cleanly shut down image.
 - **Factory content.** Check presets and demo projects on a fresh +Drive against a real unit.
-- **Version control.** The project is not under version control yet: `git init`, commit, and write a
-  CHANGELOG.
+- **CHANGELOG.** The project is in git now (repository root); a CHANGELOG is still to be written.
 - **Clean `build/`.** Remove the leftover debug binaries and the 1.9 GB `emmc_test.img`. Keep test images in a temp
   folder.

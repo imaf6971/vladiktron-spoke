@@ -24,6 +24,15 @@ void mcb_destroy(mcboard *b);
 int mcb_run(mcboard *b, double seconds);
 void mcb_stop(mcboard *b);                    // thread-safe
 
+// Power key (thread-safe). Held for about 1.5 s, the OS shows "Shutting down...", saves its working state to the
+// +Drive and powers off: mcb_powered_off then returns 1, mcb_run returns, and the board never runs again. Quit
+// this way (then mcb_destroy, which flushes and closes the images); mcb_stop halts the CPU wherever it is.
+void mcb_power_key(mcboard *b, int down);
+int mcb_powered_off(mcboard *b);
+// eMMC errors so far: commands the card did not answer, accesses past its end, failed image reads/writes (each
+// one is logged to stderr; MCB_EMMCLOG=1 logs every command).
+uint64_t mcb_emmc_errors(mcboard *b);
+
 // Latest 128x64 screen: column-major, pixel (x, y) = bit 7-(y&7) of byte x*8 + y/8, y = 0 at the bottom.
 // Thread-safe snapshot, refreshed at ~60 Hz while running. Returns a counter that increases on change.
 uint64_t mcb_screen(mcboard *b, uint8_t out[1024]);

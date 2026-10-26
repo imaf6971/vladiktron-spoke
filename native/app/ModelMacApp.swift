@@ -35,8 +35,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Quitting powers the Model:Cycles off the way its power key does, so the OS saves its working state to the
+    /// +Drive first (a couple of seconds, with "Shutting down..." on the screen).
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard board.running else { return .terminateNow }
+        board.shutDown { NSApp.reply(toApplicationShouldTerminate: true) }
+        return .terminateLater
+    }
     func applicationWillTerminate(_ notification: Notification) { board.stop() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    // MARK: the Model:Cycles menu
+
+    @objc func revealDataFolder() {
+        NSWorkspace.shared.activateFileViewerSelecting([Board.dataDir])
+    }
+
+    @objc func resetDrive() {
+        guard confirm("Reset the +Drive?",
+                      detail: "The Model:Cycles shuts down and starts again with an empty +Drive, which the OS then " +
+                              "formats with its factory content. All projects and samples on the +Drive are erased. " +
+                              "Settings are kept.",
+                      button: "Reset +Drive") else { return }
+        board.resetDrive { [weak self] in self?.report($0) }
+    }
+
+    @objc func factoryReset() {
+        guard FileManager.default.fileExists(atPath: Board.factoryFlash.path) else {
+            report(NSError(domain: "ModelMac", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                "There is no factory flash image (flash.factory.bin) in \(Board.dataDir.path). " +
+                "Run native/build.sh again to install it."]))
+            return
+        }
+        guard confirm("Factory reset?",
+                      detail: "The Model:Cycles shuts down and starts again as it left the factory: an empty +Drive " +
+                              "(formatted with its factory content) and factory settings. All projects, samples and " +
+                              "settings are erased.",
+                      button: "Factory Reset") else { return }
+        board.factoryReset { [weak self] in self?.report($0) }
+    }
+
+    private func confirm(_ message: String, detail: String, button: String) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = message
+        alert.informativeText = detail
+        alert.addButton(withTitle: button).hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1b}"
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func report(_ error: Error?) {
+        guard let error else { return }
+        let alert = NSAlert(error: error)
+        alert.runModal()
+    }
 }
 
 @main
@@ -51,7 +104,15 @@ struct ModelMacApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
-        .commands { CommandMenu("USB Audio") { UsbAudioMenu(usb: delegate.board.usbAudio) } }
+        .commands {
+            CommandMenu("Model:Cycles") {
+                Button("Reveal Data Folder") { delegate.revealDataFolder() }
+                Divider()
+                Button("Reset +Drive…") { delegate.resetDrive() }
+                Button("Factory reset…") { delegate.factoryReset() }
+            }
+            CommandMenu("USB Audio") { UsbAudioMenu(usb: delegate.board.usbAudio) }
+        }
     }
 }
 

@@ -8,8 +8,17 @@ Runs Elektron's own Model:Cycles OS 1.13 on a virtual board. The firmware comes 
 open "build/Model Mac.app"
 ```
 
-Data lives in `~/Library/Application Support/ModelMac/`: `main_os.bin` (decoded OS), `flash.bin` (boot
-flash, holds settings), `emmc.img` + `.extcsd` (the +Drive; delete both to start from a fresh drive).
+Data lives in `~/Library/Application Support/ModelMac/` (menu **Model:Cycles → Reveal Data Folder**): `main_os.bin`
+(decoded OS), `flash.bin` (boot flash, holds settings), `flash.factory.bin` (the untouched flash image, for Factory
+reset), `emmc.img` + `.extcsd` (the +Drive). `MODELMAC_DATA=/some/folder` points the app at another folder.
+
+**Quitting** powers the Model:Cycles off the way its power key does: the OS shows "Shutting down...", saves its
+working state (the active project) to the +Drive and powers off, which takes about two seconds. Only then does the
+app close the images. (If the OS has not powered off after 5 s, the CPU is stopped anyway.)
+
+**Model:Cycles → Reset +Drive…** starts again with an empty +Drive, which the OS formats with its factory content
+(settings stay). **Factory reset…** does that and also puts back the factory flash image (settings). Both ask
+first, and shut the OS down cleanly before they change any files.
 
 ## Pieces
 
@@ -19,6 +28,8 @@ flash, holds settings), `emmc.img` + `.extcsd` (the +Drive; delete both to start
 | `app/` | SwiftUI app: runs the board on its own thread, draws the 128×64 screen, plays the audio through Core Audio (`MODELMAC_AUDIOLOG=1` logs underruns), MIDI as CoreMIDI ports, MiniLab 3 mapping (`MiniLab.swift`) |
 | `mcboot` | Headless runner: `./mcboot build/main_os.bin <flash> <emmc> [seconds] [screen.png]` |
 | `mcaudio_test`, `mcmidi_test`, `mcusb_test` | Headless checks: record the OS's output while playing; MIDI notes in on each channel, and what comes out; USB link, USB-MIDI and USB audio both ways, sample for sample (PASS/FAIL) |
+| eMMC log | eMMC errors (unanswered commands, accesses past the end of the card, failed image I/O) are always logged to stderr and counted in the status line. `MCB_EMMCLOG=1` logs every command. |
+| `mcshutdown_test` | Headless check (PASS/FAIL): `./mcshutdown_test build/main_os.bin build/flash.bin`. On a fresh +Drive in a temporary folder, it changes the project, powers off with the power key, boots again and checks that the change survived, with no eMMC errors. A control run shows that a hard stop loses the change. |
 | `mcengine.c`, `mcbench` | The six-voice synth engine alone (bit-exact with Modded-Cycles' Python model) |
 | `patch_unicorn.py` | Unicorn 2.1.4 fixes for ColdFire: EMAC maths, QEMU's own exceptions, IRQ lines, safe stops |
 | `extract_os.py` | Decodes the `.syx` with Modded-Cycles' `mtlib` |
