@@ -31,6 +31,7 @@ final class AudioOut {
         let tmp = UnsafeMutablePointer<Float>.allocate(capacity: 2 * 8192)
         var primed = false
         var played = 0, underruns = 0, drops = 0, lastLog = 0
+        var peak: Float = 0
         let log = ProcessInfo.processInfo.environment["MODELMAC_AUDIOLOG"] != nil
         let node = AVAudioSourceNode(format: fmt) { _, _, frameCount, abl -> OSStatus in
             let out = UnsafeMutableAudioBufferListPointer(abl)
@@ -50,10 +51,11 @@ final class AudioOut {
             played += got
             if log && played - lastLog >= 5 * 48000 {                       // MODELMAC_AUDIOLOG: health every 5 s
                 lastLog = played
-                NSLog("Model Mac %@: %.1f s played, %ld underruns, %ld drops, %ld queued",
-                      name, Double(played) / AudioOut.rate, underruns, drops, available())
+                NSLog("Model Mac %@: %.1f s played, %ld underruns, %ld drops, %ld queued, peak %.2f",
+                      name, Double(played) / AudioOut.rate, underruns, drops, available(), peak)
+                peak = 0
             }
-            for i in 0..<got { l[i] = tmp[2 * i]; r[i] = tmp[2 * i + 1] }
+            for i in 0..<got { l[i] = tmp[2 * i]; r[i] = tmp[2 * i + 1]; peak = max(peak, abs(l[i]), abs(r[i])) }
             for i in got..<Int(frameCount) { l[i] = 0; r[i] = 0 }
             return noErr
         }

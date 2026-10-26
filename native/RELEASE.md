@@ -48,13 +48,21 @@ sample for sample. What remains:
 - **Starvation.** If the emulator thread is starved for more than 8 ms (heavy load on the Mac), the OS loses the
   streams' pace. The host then restarts them (SET_INTERFACE off and on), which leaves a short gap. Measure how
   often this happens on a busy laptop, and consider giving the CPU thread a real-time scheduling policy.
-- **Fixed USB slice.** While USB audio streams, the CPU runs in 125 µs slices (one microframe) instead of 1 ms.
-  Measure the extra CPU cost.
+- **Fixed USB slice.** While USB audio streams, the CPU runs in 125 µs slices (one microframe) instead of 1 ms:
+  about 6200 slices/s instead of 800, and the microframes take about 3–8 ms of host time per second (M4 Pro,
+  `MCB_RTLOG=1`). The process uses ~118 % CPU either way. With nothing routed, microframes take ~0.15 ms/s.
+- **Two engines on one device.** Routing *Model:Cycles to* the same device as the main output (MacBook Pro
+  Speakers, say) plays the mix twice, a few ms apart: it sounds louder and comb-filtered. Nothing breaks (both
+  queues keep their cushion), but the menu could warn about it, or leave out the main output's device.
 - **Input device drift.** The input device's clock can run faster than the Model:Cycles; the app then drops
   input chunks to keep latency down, which clicks. It needs resampling, as for the main output below.
 - **Timing quirks.** Microframes and audio blocks are put in time order, and timer 2 reads in their two interrupts
   return the scheduled time of the event (see `dtim_count`). Keep this in mind for any other OS code that times
-  itself against timer 2.
+  itself against timer 2. Only those two routines read it today (0x400589ce, 0x40004326); 0x4005131a and
+  0x40053376 also read it, but were not seen running.
+- **Restarts at power-off.** While the OS powers off it stops taking the audio interrupt, so the microframes
+  stall and the host restarts the streams a few times (`MCB_USBLOG=1`). Harmless, but the host could stop
+  restarting once the power key is held.
 
 ### Audio quality and timing
 - **Clock drift.** Audio is paced by the host clock but played by the output device's clock. Today a drift shows up
@@ -123,7 +131,7 @@ sample for sample. What remains:
   full-speed hosts are not handled.
 
 ## 4. Tests and housekeeping
-- **Automated checks.** `mcusb_test` already passes or fails. Turn `mcaudio_test`, `mcmidi_test` and the panel
+- **Automated checks.** `mcusb_test`, `mcrt_test` and `mcshutdown_test` already pass or fail. Turn `mcaudio_test`, `mcmidi_test` and the panel
   tests into checks like it (exact expectations, not printed numbers), run on every build, plus a one-hour soak test (audio underruns, eMMC
   integrity, memory).
 - **Save and load.** `mcshutdown_test` checks that the working project survives a clean power-off. Still open:

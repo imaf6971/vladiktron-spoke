@@ -355,3 +355,21 @@ if 'never rewind a half-done instruction' not in s:
     TCGv_ptr puc = tcg_const_ptr(tcg_ctx, tcg_ctx->uc);''')
     to.write_text(s)
 print('patched memop exits')
+
+# --- reading SR must not change the CPU: Unicorn's m68k reg_read sets cc_op to CC_OP_FLAGS before computing SR,
+#     which turns lazily kept condition codes (cc_op says how to derive them from the saved operands) into
+#     garbage, so the next conditional branch can go the wrong way (the OS jumped into nowhere when the board
+#     read SR between slices). Computing the CCR from the current cc_op is all a read needs.
+u = root / 'unicorn.c'
+s = u.read_text()
+old = '''        case UC_M68K_REG_SR:
+            CHECK_REG_TYPE(uint32_t);
+            env->cc_op = CC_OP_FLAGS;
+            *(uint32_t *)value = cpu_m68k_get_sr(env);'''
+if old in s:
+    s = s.replace(old, '''        case UC_M68K_REG_SR:
+            CHECK_REG_TYPE(uint32_t);
+            /* Model:Cycles board: a read leaves cc_op alone (see patch_unicorn.py). */
+            *(uint32_t *)value = cpu_m68k_get_sr(env);''')
+    u.write_text(s)
+print('patched SR read')

@@ -24,6 +24,7 @@ void uc_m68k_kick(uc_engine *uc);
                                      // (OS table 0x40149264, entry 4: 7634944 raw, 3817472 once in SLC mode)
 #define SLICE_US 1000                // CPU runs in 1 ms slices; timers and lines are serviced between them
 #define SLICE_USB_US 125             // ... and in 125 us slices (one USB microframe) while USB audio streams
+#define USB_WAIT_US 500              // longest an audio block waits for earlier USB microframes (dma50_check)
 #define AFIFO 16384                  // audio FIFO, frames (power of two)
 #define BLOCK_US (32 * 1e6 / 48000)  // one 32-frame audio block
 #define MIDI_RING 4096               // MIDI byte rings to/from the host (power of two)
@@ -125,6 +126,13 @@ struct mcboard {
     float *afifo;                           // stereo float ring for the app (AFIFO frames)
     atomic_uint_fast64_t afifo_w, afifo_r;
     uint64_t n_blocks;
+    // MCB_RTLOG: real-time health, logged each second (rt_log)
+    struct {
+        double next, late_max;              // next log, latest block (us after it was due) this second
+        uint64_t slices, late, resync, wait_irq, wait_render, wait_usb, sof_irq, dtim2;
+        double usb_us;                      // host time spent on microframes
+        uint64_t blocks0, uframes0, skips0;   // totals at the last log
+    } rt;
 
     // audio codec on I2C0 (address 0x1A, sent as 0x34): register writes are (reg, value) pairs
     uint8_t codec[256];
@@ -186,6 +194,11 @@ struct mcboard {
     // run control / outputs
     atomic_int stop;
     atomic_int running;                     // a slice is executing (watchdog kicks it)
+    atomic_uint last_pc, last_sr;           // CPU state after the last slice, for mcb_status: only the CPU
+                                            // thread may call into Unicorn while it runs (Unicorn keeps the
+                                            // thread's JIT write/execute state in shared fields; a uc_reg_read
+                                            // from another thread can leave the CPU thread's JIT pages
+                                            // writable, and the next slice faults executing them)
     pthread_t watchdog;
     pthread_mutex_t lock;
     uint8_t screen[1024];
@@ -273,8 +286,8 @@ static void dtim_program(mcboard *b, int n, double t) {
 // The OS time-stamps two events with timer 2: the audio block (DMA interrupt 0x400589c0, stored at 0x40a78e04)
 // and the USB SOF (0x40004318, which keeps "SOF - block stamp", i.e. how far into the block it fell: the USB
 // audio stream is aligned and paced by that). Our interrupts run up to a CPU slice late and in either order, so
-// the block read returns when the block was due, and the SOF read returns the stored block stamp plus the
-// microframe's offset into its block on that schedule: always consistent, as on the hardware.
+// the block read returns when the block was due, and the SOF read returns when the microframe was due: while
+// streams run, microframes and blocks go in time order (dma50_check, usb_microframes), so the two agree.
 static uint32_t dtim_count(mcboard *b, int n) {
     uint32_t mode = io_get(b, 0xFC070000u + 0x4000u * (uint32_t)n, 2);
     int clk = (mode >> 1) & 3;
@@ -282,6 +295,7 @@ static uint32_t dtim_count(mcboard *b, int n) {
     double t = now_us() - b->t0;
     if (n == 2) {
         uint32_t pc;
+        b->rt.dtim2++;
         uc_reg_read(b->uc, UC_M68K_REG_PC, &pc);
         if (pc >= 0x400589c0u && pc < 0x40058a0au && b->dma50_stamp > 0) t = b->dma50_stamp;
         else if (pc >= 0x40004318u && pc < 0x400043fcu && b->usb.uframe) t = b->usb.t_run + 125.0 * (double)(b->usb.uframe - 1);
@@ -508,11 +522,19 @@ static int usb_streaming(mcboard *b);
 static double usb_next_uframe(mcboard *b);
 static void dma50_check(mcboard *b, double t) {
     if (!b->dma50_enabled || t < b->dma50_due) return;
-    if (b->ddr[0x40a78e0fu - 0x40000000u]) return;           // previous block not rendered yet (0x40a78e0c)
-    if (usb_streaming(b) && (usb_next_uframe(b) < b->dma50_due || (b->usb.sts & b->usb.intr)))
-        return;                                              // USB audio: earlier microframes (and their
-                                                             // interrupt) first, so the OS sees events in order
-    if (t - b->dma50_due > 20000) b->dma50_due = t;          // after a stall, resync rather than burst
+    if ((b->dma_int >> 50) & 1) { b->rt.wait_irq++; return; }   // the OS has not taken the previous block's
+                                                             // interrupt yet (0x400589c0, which sets 0x40a78e0c and
+                                                             // clears INT 50): another block now would play a half
+                                                             // it never rendered (the one from two blocks before)
+    if (b->ddr[0x40a78e0fu - 0x40000000u]) { b->rt.wait_render++; return; }   // previous block not rendered yet (0x40a78e0c)
+    if (usb_streaming(b) && t - b->dma50_due < USB_WAIT_US &&
+        (usb_next_uframe(b) < b->dma50_due || (b->usb.sts & b->usb.intr)))
+        { b->rt.wait_usb++; return; }                        // USB audio: earlier microframes (and their
+                                                             // interrupt) first, so the OS sees events in order;
+                                                             // but never for long: the main output wins
+    if (t - b->dma50_due > b->rt.late_max) b->rt.late_max = t - b->dma50_due;
+    b->rt.late += t - b->dma50_due > 2000;
+    if (t - b->dma50_due > 20000) { b->dma50_due = t; b->rt.resync++; }   // after a stall, resync rather than burst
     b->dma50_stamp = b->dma50_due;
     dma50_block(b);
     b->dma50_due += BLOCK_US;
@@ -812,6 +834,12 @@ static void on_power_off(uc_engine *uc, uint64_t addr, uint32_t size, void *user
     if (atomic_exchange(&b->powered_off, 1)) return;
     atomic_store(&b->stop, 1);
     uc_emu_stop(uc);
+}
+
+// MCB_RTLOG: the OS's USB interrupt (0x40004318) is taken.
+static void on_sof_irq(uc_engine *uc, uint64_t addr, uint32_t size, void *user) {
+    (void)uc; (void)addr; (void)size;
+    ((mcboard *)user)->rt.sof_irq++;
 }
 
 // MCB_MIDILOG: each byte the OS's receive interrupt hands to its MIDI parser (0x400012cc).
@@ -1312,8 +1340,16 @@ static int usb_streaming(mcboard *b) {
     return b->usb.state == USB_READY && (b->usb.cmd & 1) && (b->usb.cap_alt || b->usb.play_alt);
 }
 static double usb_next_uframe(mcboard *b) { return b->usb.t_run + 125.0 * (double)b->usb.uframe; }
+static int rt_on(void);
+static void usb_microframes_run(mcboard *b, double t, int chained);
 static void usb_microframes(mcboard *b, double t, int chained) {
     if (b->usb.state != USB_READY || !(b->usb.cmd & 1)) return;
+    if (!rt_on()) { usb_microframes_run(b, t, chained); return; }
+    double t1 = now_us();
+    usb_microframes_run(b, t, chained);
+    b->rt.usb_us += now_us() - t1;
+}
+static void usb_microframes_run(mcboard *b, double t, int chained) {
     double due = b->usb.t_run + 125.0 * (double)b->usb.uframe;
     if (t - due > 8000) {                                    // stalled: skip ahead rather than burst; the OS
         b->usb.n_skips++;                                    // has lost the streams' pace, so restart them
@@ -1403,6 +1439,7 @@ mcboard *mcb_create(const uint8_t *os, size_t len, const char *flash_path, const
     uc_mmio_map(b->uc, 0x8C000000, 0x10000, fp_read, b, fp_write, b);   // front panel latches (FlexBus)
     uc_hook h;
     uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_render_done, b, 0x400593e2, 0x400593e2);
+    if (getenv("MCB_RTLOG")) uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_sof_irq, b, 0x40004318, 0x40004318);
     uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_power_off, b, POWER_OFF_SPIN, POWER_OFF_SPIN);
     if (getenv("MCB_MIDILOG")) uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_midi_byte, b, 0x400012cc, 0x400012cc);
     uc_hook_add(b->uc, &h, UC_HOOK_MEM_UNMAPPED, (void *)on_unmapped, b, 1, 0);
@@ -1458,6 +1495,24 @@ static void *watchdog_main(void *arg) {
     return NULL;
 }
 
+// MCB_RTLOG=1: once a second, how the board kept real time: CPU slices, audio blocks (late = started more than
+// 2 ms after due, resync = more than 20 ms, blocks lost), what held blocks back, USB microframes and stalls,
+// SOF interrupts the OS took (0x40004318), timer 2 reads.
+static int rt_on(void) { static int v = -1; if (v < 0) v = getenv("MCB_RTLOG") != NULL; return v; }
+static void rt_log(mcboard *b, double t) {
+    if (rt_on() && b->rt.next)
+        fprintf(stderr, "[rt] %.0f s: %llu slices, %llu blocks (%llu late, latest %.1f ms, %llu resyncs; waited irq %llu, render %llu, "
+                "usb %llu), %llu uframes (%llu stalls), %llu SOF irqs, %llu timer-2 reads; microframes took %.2f ms\n", t / 1e6,
+                (unsigned long long)b->rt.slices, (unsigned long long)(b->n_blocks - b->rt.blocks0),
+                (unsigned long long)b->rt.late, b->rt.late_max / 1000, (unsigned long long)b->rt.resync,
+                (unsigned long long)b->rt.wait_irq, (unsigned long long)b->rt.wait_render, (unsigned long long)b->rt.wait_usb,
+                (unsigned long long)(b->usb.n_uframes - b->rt.uframes0), (unsigned long long)(b->usb.n_skips - b->rt.skips0),
+                (unsigned long long)b->rt.sof_irq, (unsigned long long)b->rt.dtim2, b->rt.usb_us / 1000);
+    double next = t + 1e6;
+    uint64_t blocks = b->n_blocks, uframes = b->usb.n_uframes, skips = b->usb.n_skips;
+    memset(&b->rt, 0, sizeof b->rt);
+    b->rt.next = next; b->rt.blocks0 = blocks; b->rt.uframes0 = uframes; b->rt.skips0 = skips;
+}
 int mcb_run(mcboard *b, double seconds) {
     double end = seconds > 0 ? now_us() + seconds * 1e6 : 0;
     if (atomic_load(&b->powered_off)) return 0;              // powered off: nothing runs any more
@@ -1470,9 +1525,15 @@ int mcb_run(mcboard *b, double seconds) {
         atomic_store(&b->running, 1);
         uc_err r = uc_emu_start(b->uc, pc, 0xFFFFFFFFull, 0, 0);
         atomic_store(&b->running, 0);
+        b->rt.slices++;
+        uint32_t sr;
         uc_reg_read(b->uc, UC_M68K_REG_PC, &pc);
+        uc_reg_read(b->uc, UC_M68K_REG_SR, &sr);             // (safe only with patch_unicorn.py's SR read fix:
+        atomic_store(&b->last_pc, pc);                       // stock Unicorn's read corrupts the condition codes)
+        atomic_store(&b->last_sr, sr);
         if (r != UC_ERR_OK || b->fault[0]) {
             if (!b->fault[0]) snprintf(b->fault, sizeof b->fault, "%s at pc 0x%08x", uc_strerror(r), pc);
+            fprintf(stderr, "mcboard: CPU stopped: %s\n", b->fault);
             ret = 1;
             break;
         }
@@ -1483,6 +1544,7 @@ int mcb_run(mcboard *b, double seconds) {
         usb_gpt_service(b, t);
         usb_host(b, t);
         dma50_check(b, t);                                   // (USB audio interleaves the two in time order)
+        if (t >= b->rt.next) rt_log(b, t);
         if (t >= b->next_screen) {
             snapshot_screen(b);
             b->next_screen = t + 16000;
@@ -1656,9 +1718,7 @@ uint64_t mcb_screen(mcboard *b, uint8_t out[1024]) {
 }
 
 void mcb_status(mcboard *b, char *out, size_t len) {
-    uint32_t pc, sr;
-    uc_reg_read(b->uc, UC_M68K_REG_PC, &pc);
-    uc_reg_read(b->uc, UC_M68K_REG_SR, &sr);
+    uint32_t pc = atomic_load(&b->last_pc), sr = atomic_load(&b->last_sr);
     snprintf(out, len, "t=%.1fs pc=%08x sr=%04x audio blocks=%llu midi in/out=%llu/%llu usb=%d (midi %llu/%llu, audio out/in %llu/%llu, short %llu, fb %.4f) panel reads=%llu irq=L%d/v%d emmc: %llu cmds, %llu read, %llu written, %llu erases, %llu errors%s%s%s",
              (now_us() - b->t0) / 1e6, pc, sr & 0xFFFF, (unsigned long long)b->n_blocks, (unsigned long long)b->n_midi_in, (unsigned long long)b->n_midi_out, mcb_usb_state(b), (unsigned long long)b->usb.n_in, (unsigned long long)b->usb.n_out,
              (unsigned long long)b->usb.n_cap, (unsigned long long)b->usb.n_play, (unsigned long long)b->usb.n_play_short, b->usb.fb, (unsigned long long)b->n_fp_reads, b->irq_level, b->irq_vector,

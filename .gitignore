@@ -11,6 +11,7 @@ native/mcaudio_test
 native/mcmidi_test
 native/mcusb_test
 native/mcshutdown_test
+native/mcrt_test
 
 # The user's firmware, disk images and recordings
 *.syx

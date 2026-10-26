@@ -56,6 +56,31 @@ final class Board: ObservableObject, @unchecked Sendable {
         let t2 = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.refresh() }
         RunLoop.main.add(t2, forMode: .common)              // also while quitting waits (modal run loop mode)
         timer = t2
+        runTestScript()
+    }
+
+    // Self-check: MODELMAC_TEST="8:play,20:out=BuiltInSpeakerDevice,30:out=,60:quit" runs these steps at the
+    // given seconds after launch: press PLAY, route USB audio out/in to a device UID (empty: nowhere), quit.
+    private func runTestScript() {
+        guard let script = ProcessInfo.processInfo.environment["MODELMAC_TEST"] else { return }
+        for step in script.split(separator: ",") {
+            let parts = step.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2, let at = Double(parts[0]) else { continue }
+            let kv = parts[1].split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+            let arg = kv.count > 1 && !kv[1].isEmpty ? kv[1] : nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + at) { [weak self] in
+                guard let self else { return }
+                NSLog("Model Mac test: %@", parts[1])
+                switch kv[0] {
+                case "play": self.key(7, down: true); DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { self.key(7, down: false) }
+                case "out": self.usbAudio.outputUID = arg
+                case "in": self.usbAudio.inputUID = arg
+                case "quit": RunLoop.main.perform { NSApp.terminate(nil) }   // not inside this main-queue
+                                                                             // block: the shutdown replies on it
+                default: break
+                }
+            }
+        }
     }
 
     var running: Bool { board != nil }

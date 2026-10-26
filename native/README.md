@@ -25,13 +25,15 @@ first, and shut the OS down cleanly before they change any files.
 | File | What |
 |---|---|
 | `mcboard.c/.h` | Virtual board: CPU (patched Unicorn), interrupt controllers, PIT and DMA timers, GPIO, SPI flash, eSDHC + eMMC (Samsung "4FTE4R" in pSLC mode), eDMA, front-panel bus, MIDI UART (UART9), USB device controller with a built-in USB host, audio-codec I2C stub |
-| `app/` | SwiftUI app: runs the board on its own thread, draws the 128×64 screen, plays the audio through Core Audio (`MODELMAC_AUDIOLOG=1` logs underruns), MIDI as CoreMIDI ports, MiniLab 3 mapping (`MiniLab.swift`) |
+| `app/` | SwiftUI app: runs the board on its own thread, draws the 128×64 screen, plays the audio through Core Audio (`MODELMAC_AUDIOLOG=1` logs underruns, drops, queue depth and peak level every 5 s; `MODELMAC_TEST="8:play,20:out=BuiltInSpeakerDevice,30:out=,60:quit"` presses PLAY, routes USB audio and quits on a schedule, for scripted runs), MIDI as CoreMIDI ports, MiniLab 3 mapping (`MiniLab.swift`) |
 | `mcboot` | Headless runner: `./mcboot build/main_os.bin <flash> <emmc> [seconds] [screen.png]` |
 | `mcaudio_test`, `mcmidi_test`, `mcusb_test` | Headless checks: record the OS's output while playing; MIDI notes in on each channel, and what comes out; USB link, USB-MIDI and USB audio both ways, sample for sample (PASS/FAIL) |
+| `mcrt_test` | Headless real-time check (PASS/FAIL): `./mcrt_test build/main_os.bin <flash> <emmc> [seconds per phase]`. With the board on its own thread as in the app, it plays a pattern and reads the main output every 1 ms, with USB audio off, then with both streams on, then off again. Each phase fails if the output runs below 48 kHz, if a block arrives more than 10 ms late, or if a block comes out repeated (the same as the one or two before: a half of the OS's audio ring it had not rendered). Run it on an otherwise idle Mac. |
+| Real-time log | `MCB_RTLOG=1` logs once a second how the board kept time: CPU slices, audio blocks (late, resynced, and what held them back), USB microframes and stalls, SOF interrupts, timer-2 reads, and the host time the microframes took. |
 | eMMC log | eMMC errors (unanswered commands, accesses past the end of the card, failed image I/O) are always logged to stderr and counted in the status line. `MCB_EMMCLOG=1` logs every command. |
 | `mcshutdown_test` | Headless check (PASS/FAIL): `./mcshutdown_test build/main_os.bin build/flash.bin`. On a fresh +Drive in a temporary folder, it changes the project, powers off with the power key, boots again and checks that the change survived, with no eMMC errors. A control run shows that a hard stop loses the change. |
 | `mcengine.c`, `mcbench` | The six-voice synth engine alone (bit-exact with Modded-Cycles' Python model) |
-| `patch_unicorn.py` | Unicorn 2.1.4 fixes for ColdFire: EMAC maths, QEMU's own exceptions, IRQ lines, safe stops |
+| `patch_unicorn.py` | Unicorn 2.1.4 fixes for ColdFire: EMAC maths, QEMU's own exceptions, IRQ lines, safe stops, an SR read that no longer changes the condition codes |
 | `extract_os.py` | Decodes the `.syx` with Modded-Cycles' `mtlib` |
 
 ## Playing it
@@ -52,7 +54,8 @@ first, and shut the OS down cleanly before they change any files.
   stereo) and plays what it is sent, mixed into its output at −18 dB. *Model:Cycles to* picks the Mac output that
   gets its stream, *Into Model:Cycles from* the input that feeds it (macOS asks for microphone access). With a
   loopback device such as BlackHole a DAW can record the Model:Cycles or play into it. Each stream runs only while
-  routed; the emulator then works in 125 µs steps, one USB microframe.
+  routed; the emulator then works in 125 µs steps, one USB microframe. With nothing routed, USB audio costs the
+  emulator about 0.15 ms of host time per second; the main output comes first either way.
 - **Arturia MiniLab 3** (factory settings), picked up automatically when connected:
 
   | MiniLab 3 | Model:Cycles |

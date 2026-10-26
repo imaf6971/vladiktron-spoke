@@ -2,7 +2,7 @@
 # Builds the Model:Cycles virtual board and the Mac app from scratch.
 #   ./build.sh [path/to/model-cycles_OS1.13.syx]
 # Needs: git, python3, cmake, ninja, pkg-config, Xcode command line tools.
-# Produces: build/main_os.bin + build/flash.bin (decoded from your .syx), ./mcbench, ./mcboot, ./mcaudio_test, ./mcmidi_test, ./mcusb_test, ./mcshutdown_test,
+# Produces: build/main_os.bin + build/flash.bin (decoded from your .syx), ./mcbench, ./mcboot, ./mcaudio_test, ./mcmidi_test, ./mcusb_test, ./mcshutdown_test, ./mcrt_test,
 #           build/Model Mac.app, and installs the firmware files into ~/Library/Application Support/ModelMac.
 set -e
 cd "$(dirname "$0")"
@@ -39,6 +39,7 @@ cc $CFLAGS mcboard.c mcaudio_test.c $LIBS -o mcaudio_test
 cc $CFLAGS mcboard.c mcmidi_test.c $LIBS -o mcmidi_test
 cc $CFLAGS mcboard.c mcusb_test.c $LIBS -o mcusb_test
 cc $CFLAGS mcboard.c mcshutdown_test.c $LIBS -o mcshutdown_test
+cc $CFLAGS mcboard.c mcrt_test.c $LIBS -o mcrt_test
 
 # 4. Mac app
 cc $CFLAGS -c mcboard.c -o build/obj/mcboard.o
