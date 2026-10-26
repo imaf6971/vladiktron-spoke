@@ -1,0 +1,21 @@
+# Build output and fetched dependencies
+native/build/
+native/third_party/
+
+# Test and tool binaries (built by native/build.sh)
+native/mcbench
+native/mcboot
+native/mckeyscan
+native/mcpanel_test
+native/mcaudio_test
+native/mcmidi_test
+native/mcusb_test
+native/mcshutdown_test
+
+# The user's firmware, disk images and recordings
+*.syx
+*.img
+*.img.extcsd
+*.wav
+
+.DS_Store
