@@ -1,6 +1,7 @@
 // The Model:Cycles front panel, laid out from a photo of the hardware (design units = photo pixels / 2).
 // Keys and pads press while held (⌥-click latches a key so it stays held for combinations); knobs turn by
-// dragging up/down or scrolling. Shift = FUNC, Space = PLAY.
+// dragging up/down or scrolling; clicking LEVEL/DATA without dragging presses it. Shift = FUNC, Space = PLAY,
+// Return = LEVEL/DATA press.
 import AppKit
 import SwiftUI
 
@@ -12,6 +13,7 @@ enum Panel {
     // key-matrix index (mcboard.h)
     static let presetMenu = 0, quantize = 1, click = 2, lfoSetup = 3, tapBpm = 4, stop = 5, tempSave = 6
     static let play = 7, padMenu = 8, record = 9, function = 10, pattern = 11, retrig = 12, track = 13, page = 30
+    static let dataPush = 31                           // pressing LEVEL/DATA (OS key code 0x20)
     static func step(_ n: Int) -> Int { 13 + n }       // steps 1..16 -> 14..29
 
     // LED bits (OS table 0x4010abf8 and observed behaviour)
@@ -21,7 +23,7 @@ enum Panel {
     static let knobLED = [26, 34, 32, 41, 27, 24, 33, 42, 15, 25, 35, 43]     // encoders 2..13
     static let keyLED: [Int: Int] = [play: 0, stop: 12, record: 3, click: 8, quantize: 9, function: 4,
                                      pattern: 5, retrig: 13, track: 7, page: 51, presetMenu: 10,
-                                     lfoSetup: 14, padMenu: 11, tempSave: 2, tapBpm: 1]
+                                     lfoSetup: 14, padMenu: 1, tempSave: 2, tapBpm: 11]   // TEMPO (bit 11) blinks with the beat
 }
 
 private enum Palette {
@@ -418,6 +420,7 @@ struct KnobView: View {
     @State private var lastY: CGFloat?
     @State private var residue: CGFloat = 0
     @State private var spin: Double = 0
+    @State private var turned = false
 
     var body: some View {
         ZStack {
@@ -442,9 +445,14 @@ struct KnobView: View {
                 guard let ly = lastY else { return }
                 residue += ly - y                      // up = clockwise
                 let steps = Int(residue / 5)           // 5 pt of drag per detent
-                if steps != 0 { residue -= CGFloat(steps) * 5; turn(steps) }
+                if steps != 0 { residue -= CGFloat(steps) * 5; turn(steps); turned = true }
             }
-            .onEnded { _ in lastY = nil; residue = 0 })
+            .onEnded { v in
+                // a click that didn't turn the knob presses it (only LEVEL/DATA is a push encoder)
+                let moved = abs(v.translation.width) + abs(v.translation.height) > 3
+                if id == 1, !turned, !moved { board.tap(Panel.dataPush) }
+                lastY = nil; residue = 0; turned = false
+            })
         .onReceive(NotificationCenter.default.publisher(for: .knobScroll)) { n in
             guard let (knob, steps) = n.object as? (Int, Int), knob == id else { return }
             turn(steps)
@@ -486,7 +494,7 @@ extension Notification.Name { static let knobScroll = Notification.Name("knobScr
 
 // MARK: - Keyboard and scroll wheel
 
-/// Shift = FUNC, Space = PLAY; the scroll wheel turns the knob under the pointer.
+/// Shift = FUNC, Space = PLAY, Return = LEVEL/DATA press; the scroll wheel turns the knob under the pointer.
 struct KeyboardMonitor: NSViewRepresentable {
     let board: Board
     @Binding var hoveredKnob: Int?
@@ -495,6 +503,7 @@ struct KeyboardMonitor: NSViewRepresentable {
         var monitors: [Any] = []
         var shift = false
         var space = false
+        var ret = false
         var scrollResidue: CGFloat = 0
     }
 
@@ -510,9 +519,17 @@ struct KeyboardMonitor: NSViewRepresentable {
             return e
         } as Any)
         c.monitors.append(NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { e in
-            guard e.keyCode == 49 else { return e }                    // space
             let down = e.type == .keyDown
-            if down != c.space { c.space = down; board.key(Panel.play, down: down) }
+            switch e.keyCode {
+            case 49:                                                   // space
+                if down != c.space { c.space = down; board.key(Panel.play, down: down) }
+            case 36, 76:                                               // Return, keypad Enter: LEVEL/DATA press
+                // leave Return to dialogs and sheets (their default buttons)
+                guard NSApp.modalWindow == nil, e.window?.attachedSheet == nil else { return e }
+                if down != c.ret { c.ret = down; board.key(Panel.dataPush, down: down) }
+            default:
+                return e
+            }
             return nil
         } as Any)
         c.monitors.append(NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { e in

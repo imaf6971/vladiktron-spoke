@@ -55,8 +55,9 @@ first, and shut the OS down cleanly before they change any files.
 
 - **Keys and pads**: click and hold. ⌥-click latches a key down (click again to release), for combinations
   such as PATTERN + step or TRACK + pad.
-- **Knobs**: drag up/down, or scroll over them. One step is one detent.
-- **Keyboard**: Shift = FUNC, Space = PLAY.
+- **Knobs**: drag up/down, or scroll over them. One step is one detent. Click LEVEL/DATA without dragging to
+  press it (open, confirm).
+- **Keyboard**: Shift = FUNC, Space = PLAY, Return = LEVEL/DATA press.
 - LEDs, the screen and all menus come from the OS itself.
 - **MIDI**: two CoreMIDI port pairs, as the hardware shows up on a Mac: **"Model:Cycles"** is its USB-MIDI port,
   **"Model:Cycles TRS"** the MIDI IN and OUT/THRU jacks. Notes on channels 1–6 play tracks 1–6, the auto channel

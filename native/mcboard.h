@@ -39,7 +39,7 @@ uint64_t mcb_screen(mcboard *b, uint8_t out[1024]);
 
 // Front panel input (thread-safe). Keys are key-matrix indexes (OS key-code table 0x4010aef8):
 //   0 PRESET MENU, 1 QUANTIZE, 2 CLICK, 3 LFO SETUP, 4 TAP BPM, 5 STOP, 6 TEMP SAVE, 7 PLAY, 8 PAD MENU,
-//   9 RECORD, 10 FUNC, 11 PATTERN, 12 RETRIG, 13 TRACK, 14..29 steps 1..16, 30 PAGE.
+//   9 RECORD, 10 FUNC, 11 PATTERN, 12 RETRIG, 13 TRACK, 14..29 steps 1..16, 30 PAGE, 31 LEVEL/DATA press.
 // Knobs are the OS's
 // encoder numbers 1..16 (1 LEVEL/DATA, 2 PITCH, 3 DECAY, 4 COLOR, 5 SHAPE, 6 SWEEP, 7 CONTOUR, 8 DELAY SEND,
 // 9 REVERB SEND, 10 LFO SPEED, 11 VOL+DIST, 12 SWING, 13 CHANCE, 14 REVERB SIZE, 15 DELAY TIME, 16 MAIN VOLUME);

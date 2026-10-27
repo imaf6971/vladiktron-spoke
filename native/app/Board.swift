@@ -250,6 +250,12 @@ final class Board: ObservableObject, @unchecked Sendable {
         if let b = board { mcb_key(b, Int32(index), down ? 1 : 0) }
     }
 
+    /// A short press: the key is down for 80 ms, long enough for the OS's key scan to see it.
+    func tap(_ index: Int) {
+        key(index, down: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in self?.key(index, down: false) }
+    }
+
     func turn(_ encoder: Int, steps: Int) {
         if let b = board, steps != 0 { mcb_encoder(b, Int32(encoder), Int32(steps)) }
     }
