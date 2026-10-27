@@ -279,12 +279,19 @@ static void pit_program(mcboard *b, int n, double t) {
     }
 }
 // DMA timers n -> INTC0 source 32+n. DTMR: RST 0, CLK 2:1, FRR 3, ORRI 4, PS 15:8; DTRR reference; DTER w1c.
+// The OS's UI tick (software timers: blinking, key repeat, ...) is timer 3 at internal / 16 with reference
+// 281600, 30 Hz (set up at 0x4003eb26; its interrupt 0x4003eaf8 posts event 5 to the UI loop).
 #define DTIM_CLOCK_MHZ 135.168
+#define AUDIO_MCLK_MHZ 12.288
+static double dtim_mhz(uint32_t mode) {   // the clock CLK 2:1 selects, before the prescaler (0 = stopped)
+    int clk = (mode >> 1) & 3;
+    return clk == 3 ? AUDIO_MCLK_MHZ : clk == 2 ? DTIM_CLOCK_MHZ / 16 : clk == 1 ? DTIM_CLOCK_MHZ : 0;
+}
 static void dtim_program(mcboard *b, int n, double t) {
     uint32_t base = 0xFC070000u + 0x4000u * n;
     uint32_t mode = io_get(b, base, 2), ref = io_get(b, base + 4, 4);
-    if ((mode & 1) && (mode & 0x10)) {
-        double rate = DTIM_CLOCK_MHZ / (((mode >> 8) & 0xFF) + 1);
+    if ((mode & 1) && (mode & 0x10) && dtim_mhz(mode) > 0) {
+        double rate = dtim_mhz(mode) / (((mode >> 8) & 0xFF) + 1);
         b->dtim_period[n] = (mode & 8) ? (ref + 1.0) / rate : 0;
         b->dtim_due[n] = t + (ref + 1.0) / rate;
     } else {
@@ -294,7 +301,6 @@ static void dtim_program(mcboard *b, int n, double t) {
 // Counter value: the clock DTMR selects (CLK 2:1 = 1 internal, 2 internal / 16, 3 the DTIN pin, which on this
 // board is the 12.288 MHz audio master clock: timer 2, whose ticks the OS turns into frames as (t + 128) >> 8),
 // divided by PS + 1.
-#define AUDIO_MCLK_MHZ 12.288
 // The OS time-stamps two events with timer 2: the audio block (DMA interrupt 0x400589c0, stored at 0x40a78e04)
 // and the USB SOF (0x40004318, which keeps "SOF - block stamp", i.e. how far into the block it fell: the USB
 // audio stream is aligned and paced by that). Our interrupts run up to a CPU slice late and in either order, so
@@ -302,8 +308,7 @@ static void dtim_program(mcboard *b, int n, double t) {
 // streams run, microframes and blocks go in time order (dma50_check, usb_microframes), so the two agree.
 static uint32_t dtim_count(mcboard *b, int n) {
     uint32_t mode = io_get(b, 0xFC070000u + 0x4000u * (uint32_t)n, 2);
-    int clk = (mode >> 1) & 3;
-    double mhz = clk == 3 ? AUDIO_MCLK_MHZ : clk == 2 ? DTIM_CLOCK_MHZ / 16 : DTIM_CLOCK_MHZ;
+    double mhz = dtim_mhz(mode) > 0 ? dtim_mhz(mode) : DTIM_CLOCK_MHZ;
     double t = now_us() - b->t0;
     if (n == 2) {
         uint32_t pc;
@@ -846,6 +851,27 @@ static void on_power_off(uc_engine *uc, uint64_t addr, uint32_t size, void *user
     if (atomic_exchange(&b->powered_off, 1)) return;
     atomic_store(&b->stop, 1);
     uc_emu_stop(uc);
+}
+
+// The +Drive's file system ("ekFS": presets, the FUNC + PRESET MENU browser) has its superblock in eMMC block
+// EKFS_SUPER ("SFke", written by the format routine 0x4007d64a). At boot the OS mounts it (`jsr 0x4007d91c` at
+// MOUNT_CALL), or formats it instead (`jsr 0x4007d8fc`) when the bootloader's FORMAT +DRIVE set bit 4 of its boot
+// flags (0x4013e4d0). A real Model:Cycles leaves the factory formatted; a new image never is, so the mount fails
+// and the browser stays empty. When that block has never been written, the mount call is pointed at the format.
+// Only the file system is formatted: the boot flag would also run the OS's factory reset of the projects, which
+// an existing image must keep.
+#define EKFS_SUPER 0x1c0000u
+#define MOUNT_CALL 0x400056d4u
+#define EKFS_FORMAT 0x4007d8fcu
+static void format_ekfs_if_blank(mcboard *b) {
+    uint8_t blk[512] = {0}, *call = b->ddr + (MOUNT_CALL - 0x40000000u);
+    if (call[0] != 0x4E || call[1] != 0xB9 || be32(call + 2) != 0x4007d91cu) return;   // not OS 1.13's code
+    fseeko(b->card.f, (off_t)EKFS_SUPER * 512, SEEK_SET);
+    size_t got = fread(blk, 1, sizeof blk, b->card.f);
+    if (ferror(b->card.f)) { clearerr(b->card.f); return; }
+    for (size_t i = 0; i < got; i++) if (blk[i] != 0 && blk[i] != 0xFF) return;
+    fprintf(stderr, "mcboard: the +Drive's file system was never formatted; the OS formats it at boot\n");
+    put_be32(call + 2, EKFS_FORMAT);
 }
 
 // The OS has nothing to do until its next interrupt (see IDLE_PC): end the slice, so the CPU thread can sleep.
@@ -1444,6 +1470,7 @@ mcboard *mcb_create(const uint8_t *os, size_t len, const char *flash_path, const
     b->flash.path = strdup(flash_path);
     b->flash.cmd = -1;
     if (emmc_open(&b->card, emmc_path, err, errlen)) goto fail;
+    format_ekfs_if_blank(b);
 
     uc_err r = uc_open(UC_ARCH_M68K, UC_MODE_BIG_ENDIAN, &b->uc);
     if (r) { snprintf(err, errlen, "uc_open: %s", uc_strerror(r)); goto fail; }
