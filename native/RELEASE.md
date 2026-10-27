@@ -20,7 +20,9 @@ here). The app bundles both files (Help → Licences) and its About panel names 
 trademark disclaimer.
 
 Decided: "Model:Cycles" and "Elektron" stay, used only to say which device's OS the app runs, as Modded-Cycles
-does; the app's own name is Model Mac, the panel carries its own wordmark, and the About panel and notices say it
+does; the app's own name is Vladiktron Spoke (renamed from Model Mac on 2026-10-27, after checking the App Store
+and music software for clashes; trademark registers not yet searched), the panel carries its own wordmark and the
+label "Spoke", and the About panel and notices say it
 is not affiliated with Elektron. Still open:
 - **Source with each binary.** GPL-2.0 needs the complete source with a binary release, Unicorn included:
   attach a source archive (this repository plus Unicorn 2.1.4 with `patch_unicorn.py` applied) to every release,
@@ -40,11 +42,11 @@ Python or the Modded-Cycles clone for the firmware. What remains:
 - **A sandboxed build** (if the app goes to the Mac App Store) would need the Open panel's security-scoped URL
   and no `ditto` subprocess for the `.zip`.
 - **First-run copy** names Elektron and links its site; it is part of the names-and-look decision above.
-- The first-run screen has been checked in a snapshot and the install by a scripted run (`MODELMAC_INSTALL`); the
+- The first-run screen has been checked in a snapshot and the install by a scripted run (`SPOKE_INSTALL`); the
   Open panel and drag and drop have not been clicked through.
 
 ### Signing and distribution
-- Proper bundle ID, Developer ID signing, hardened runtime and notarisation. Unicorn's JIT needs
+- Developer ID signing (the bundle ID is now `io.github.imaf6971.spoke`), hardened runtime and notarisation. Unicorn's JIT needs
   `com.apple.security.cs.allow-jit` (and `MAP_JIT` on Apple Silicon). Verify it still runs once signed.
 - Build with an Xcode project or a Swift package instead of `swiftc` in a shell script, with Unicorn and its patches
   pinned and vendored rather than cloned at build time (`build.sh` still needs git, Python, CMake and Ninja for

@@ -20,10 +20,28 @@ final class Board: ObservableObject, @unchecked Sendable {
     private let midi = MidiPort()
     private var lastGen: UInt64 = 0
 
-    // MODELMAC_DATA=/some/folder uses another data folder (for tests).
-    static let dataDir = ProcessInfo.processInfo.environment["MODELMAC_DATA"].map { URL(fileURLWithPath: $0, isDirectory: true) }
-        ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ModelMac", isDirectory: true)
+    // SPOKE_DATA=/some/folder uses another data folder (for tests).
+    private static let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    static let dataDir = ProcessInfo.processInfo.environment["SPOKE_DATA"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+        ?? appSupport.appendingPathComponent("Vladiktron Spoke", isDirectory: true)
+
+    /// The app used to be Model Mac, with its data in ModelMac/ and its settings under local.modelmac.app. Moves both
+    /// over once, before the board starts, so the +Drive, settings and USB audio routes carry on.
+    static func moveModelMacData() {
+        let old = appSupport.appendingPathComponent("ModelMac", isDirectory: true), fm = FileManager.default
+        if ProcessInfo.processInfo.environment["SPOKE_DATA"] == nil, fm.fileExists(atPath: old.path) {
+            if fm.fileExists(atPath: dataDir.path) {
+                NSLog("Spoke: both %@ and %@ exist; using the second", old.path, dataDir.path)
+            } else {
+                do { try fm.moveItem(at: old, to: dataDir) } catch { NSLog("Spoke: could not move %@: %@", old.path, "\(error)") }
+            }
+        }
+        let defaults = UserDefaults.standard, oldDomain = "local.modelmac.app"
+        if let settings = defaults.persistentDomain(forName: oldDomain) {
+            for (key, value) in settings where defaults.object(forKey: key) == nil { defaults.set(value, forKey: key) }
+            defaults.removePersistentDomain(forName: oldDomain)     // once: a route set to nothing must stay nothing
+        }
+    }
 
     func start() {
         let os = Board.dataDir.appendingPathComponent("main_os.bin")
@@ -68,11 +86,11 @@ final class Board: ObservableObject, @unchecked Sendable {
         runTestScript()
     }
 
-    // Self-check: MODELMAC_TEST="8:play,20:out=BuiltInSpeakerDevice,30:out=,60:quit" runs these steps at the
+    // Self-check: SPOKE_TEST="8:play,20:out=BuiltInSpeakerDevice,30:out=,60:quit" runs these steps at the
     // given seconds after launch: press PLAY, route USB audio out/in to a device UID (empty: nowhere), open the
     // About panel ("about"), quit.
     private func runTestScript() {
-        guard let script = ProcessInfo.processInfo.environment["MODELMAC_TEST"] else { return }
+        guard let script = ProcessInfo.processInfo.environment["SPOKE_TEST"] else { return }
         for step in script.split(separator: ",") {
             let parts = step.split(separator: ":", maxSplits: 1).map(String.init)
             guard parts.count == 2, let at = Double(parts[0]) else { continue }
@@ -80,7 +98,7 @@ final class Board: ObservableObject, @unchecked Sendable {
             let arg = kv.count > 1 && !kv[1].isEmpty ? kv[1] : nil
             DispatchQueue.main.asyncAfter(deadline: .now() + at) { [weak self] in
                 guard let self else { return }
-                NSLog("Model Mac test: %@", parts[1])
+                NSLog("Spoke test: %@", parts[1])
                 switch kv[0] {
                 case "play": self.key(7, down: true); DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { self.key(7, down: false) }
                 case "out": self.usbAudio.outputUID = arg
@@ -108,7 +126,7 @@ final class Board: ObservableObject, @unchecked Sendable {
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             let end = Date().addingTimeInterval(timeout)
             while !t.isFinished && Date() < end { usleep(5000) }
-            if mcb_powered_off(b) == 0 { NSLog("Model Mac: the OS did not power off within %.0f s; stopping it", timeout) }
+            if mcb_powered_off(b) == 0 { NSLog("Spoke: the OS did not power off within %.0f s; stopping it", timeout) }
             DispatchQueue.main.async { self.stop(); self.shuttingDown = false; done() }
         }
     }
@@ -188,7 +206,7 @@ final class Board: ObservableObject, @unchecked Sendable {
 
     /// Unpacks a .zip into a new temporary folder (nil if ditto fails).
     private static func unzip(_ zip: URL) -> URL? {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ModelMac-" + UUID().uuidString)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Spoke-" + UUID().uuidString)
         let ditto = Process()
         ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
         ditto.arguments = ["-x", "-k", zip.path, dir.path]
@@ -279,18 +297,18 @@ final class Board: ObservableObject, @unchecked Sendable {
         }
     }
 
-    // Self-check: MODELMAC_SNAPSHOT=/path.png saves the rendered window content (10 s after launch, or when
+    // Self-check: SPOKE_SNAPSHOT=/path.png saves the rendered window content (10 s after launch, or when
     // snapshotNow() is called by the demo).
     var snapshotView: (() -> NSView?)?
     private var snapshotDone = false
     private let launched = Date()
     private func snapshotIfRequested() {
-        guard ProcessInfo.processInfo.environment["MODELMAC_DEMO"] == nil,
+        guard ProcessInfo.processInfo.environment["SPOKE_DEMO"] == nil,
               Date().timeIntervalSince(launched) > 10 else { return }
         snapshotNow()
     }
     func snapshotNow() {
-        guard !snapshotDone, let path = ProcessInfo.processInfo.environment["MODELMAC_SNAPSHOT"],
+        guard !snapshotDone, let path = ProcessInfo.processInfo.environment["SPOKE_SNAPSHOT"],
               let view = snapshotView?() else { return }
         snapshotDone = true
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }

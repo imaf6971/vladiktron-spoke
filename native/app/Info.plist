@@ -2,17 +2,17 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>Model Mac</string>
+    <key>CFBundleName</key><string>Vladiktron Spoke</string>
     <key>NSHumanReadableCopyright</key><string>© 2026 Миронов Владислав Андреевич. Free software under the GNU GPL, version 2.</string>
-    <key>CFBundleDisplayName</key><string>Model Mac</string>
-    <key>CFBundleIdentifier</key><string>local.modelmac.app</string>
-    <key>CFBundleExecutable</key><string>ModelMac</string>
+    <key>CFBundleDisplayName</key><string>Vladiktron Spoke</string>
+    <key>CFBundleIdentifier</key><string>io.github.imaf6971.spoke</string>
+    <key>CFBundleExecutable</key><string>VladiktronSpoke</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
-    <key>NSMicrophoneUsageDescription</key><string>Model Mac feeds the audio input you choose in the USB Audio menu into the Model:Cycles' USB audio input.</string>
+    <key>NSMicrophoneUsageDescription</key><string>Vladiktron Spoke feeds the audio input you choose in the USB Audio menu into the Model:Cycles' USB audio input.</string>
 </dict>
 </plist>

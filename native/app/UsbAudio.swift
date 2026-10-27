@@ -135,7 +135,7 @@ final class UsbAudio: ObservableObject {
     private func startInput(device: AudioDevice, board b: OpaquePointer) {
         let engine = AVAudioEngine()
         do { try engine.inputNode.auAudioUnit.setDeviceID(device.id) } catch {
-            NSLog("Model Mac: USB audio input %@ failed: %@", device.name, "\(error)")
+            NSLog("Spoke: USB audio input %@ failed: %@", device.name, "\(error)")
             return
         }
         let src = engine.inputNode.outputFormat(forBus: 0)
@@ -160,7 +160,7 @@ final class UsbAudio: ObservableObject {
         }
         do { try engine.start(); inEngine = engine } catch {
             engine.inputNode.removeTap(onBus: 0)
-            NSLog("Model Mac: USB audio input %@ failed: %@", device.name, "\(error)")
+            NSLog("Spoke: USB audio input %@ failed: %@", device.name, "\(error)")
         }
     }
 }

@@ -63,7 +63,7 @@ final class MidiPort {
     private var client = MIDIClientRef()
     private var pairs: [MidiPortPair] = []
     private var timer: DispatchSourceTimer?
-    private let queue = DispatchQueue(label: "Model Mac MIDI out", qos: .userInteractive)
+    private let queue = DispatchQueue(label: "Vladiktron Spoke MIDI out", qos: .userInteractive)
     private(set) var controller: MiniLab?
 
     func start(board b: OpaquePointer, panel: MiniLab.Panel, onControllerChange: @escaping (String?) -> Void) {
@@ -74,10 +74,10 @@ final class MidiPort {
         pairs = [usb, trs]
         let lab = MiniLab(panel: panel, notes: trs, onChange: onControllerChange)
         controller = lab
-        guard MIDIClientCreateWithBlock("Model Mac" as CFString, &client, { [weak lab] note in
+        guard MIDIClientCreateWithBlock("Vladiktron Spoke" as CFString, &client, { [weak lab] note in
             if note.pointee.messageID == .msgSetupChanged { lab?.rescan() }
         }) == noErr else {
-            NSLog("Model Mac: CoreMIDI unavailable")
+            NSLog("Spoke: CoreMIDI unavailable")
             return
         }
         for p in pairs { p.create(client: client) }

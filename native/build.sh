@@ -3,8 +3,8 @@
 #   ./build.sh [path/to/model-cycles_OS1.13.syx]
 # Needs: git, python3, cmake, ninja, pkg-config, Xcode command line tools.
 # Produces: ./mcinstall, ./mcbench, ./mcboot, ./mcaudio_test, ./mcmidi_test, ./mcusb_test, ./mcshutdown_test, ./mcrt_test
-#           and build/Model Mac.app. If the .syx is there, also build/main_os.bin + build/flash.bin (for the
-#           command-line tools), and installs the firmware into ~/Library/Application Support/ModelMac as the
+#           and build/Vladiktron Spoke.app. If the .syx is there, also build/main_os.bin + build/flash.bin (for the
+#           command-line tools), and installs the firmware into ~/Library/Application Support/Vladiktron Spoke as the
 #           app's first-run screen would.
 set -e
 cd "$(dirname "$0")"
@@ -48,17 +48,20 @@ cc $CFLAGS mcboard.c mcrt_test.c $LIBS -o mcrt_test
 # 4. Mac app
 cc $CFLAGS -c mcboard.c -o build/obj/mcboard.o
 cc $CFLAGS -c mcfirmware.c -o build/obj/mcfirmware.o
-APP="build/Model Mac.app"
+rm -rf "build/Model Mac.app"                        # the app's old name
+APP="build/Vladiktron Spoke.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp app/Info.plist "$APP/Contents/Info.plist"
 cp ../LICENSE ../THIRD-PARTY-NOTICES.md "$APP/Contents/Resources/"
 swiftc -O -parse-as-library -import-objc-header app/Bridging.h app/*.swift build/obj/mcboard.o build/obj/mcfirmware.o \
-    $UC/build/libunicorn.a -lz -o "$APP/Contents/MacOS/ModelMac"
+    $UC/build/libunicorn.a -lz -o "$APP/Contents/MacOS/VladiktronSpoke"
 codesign --force -s - "$APP" 2> /dev/null
 
 # 5. Firmware files for the app (your own, never inside the bundle). Existing flash/eMMC state is kept;
 #    flash.factory.bin is the untouched image the app's Factory reset goes back to.
-DATA="$HOME/Library/Application Support/ModelMac"
+DATA="$HOME/Library/Application Support/Vladiktron Spoke"
+OLD="$HOME/Library/Application Support/ModelMac"     # the app's data under its old name moves over, as the app does
+[ -d "$OLD" ] && [ ! -e "$DATA" ] && mv "$OLD" "$DATA"
 [ -f "$SYX" ] && ./mcinstall "$SYX" "$DATA"
-echo "built ./mcbench, ./mcboot and build/Model Mac.app (data: $DATA)"
+echo "built ./mcbench, ./mcboot and build/Vladiktron Spoke.app (data: $DATA)"

@@ -155,7 +155,7 @@ struct PanelView: View {
             .frame(width: 129, height: 73)
             .shadow(color: .black.opacity(0.25), radius: 1.5, y: 1)
             .position(x: 203.5, y: 197.5)
-            Text("Model:Cycles").font(.system(size: 13.5, weight: .semibold)).foregroundStyle(Palette.label)
+            Text("Spoke").font(.system(size: 13.5, weight: .semibold)).foregroundStyle(Palette.label)
                 .position(x: 203, y: 252.5)
         }
     }

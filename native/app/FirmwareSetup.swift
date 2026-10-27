@@ -32,7 +32,7 @@ struct FirmwareSetupView: View {
             Color.black.opacity(0.35)
             VStack(alignment: .leading, spacing: 14) {
                 Text("Install the Model:Cycles OS").font(.title2.weight(.semibold))
-                Text(LocalizedStringKey("Model Mac runs Elektron's own OS 1.13 for the Model:Cycles. It doesn't come " +
+                Text(LocalizedStringKey("Vladiktron Spoke runs Elektron's own OS 1.13 for the Model:Cycles. It doesn't come " +
                      "with the app: download **Model:Cycles OS 1.13** from Elektron's support page, then choose the " +
                      ".zip (or the .syx inside it) here, or drop it on this window."))
                     .fixedSize(horizontal: false, vertical: true)

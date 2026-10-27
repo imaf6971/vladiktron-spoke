@@ -32,7 +32,7 @@ final class AudioOut {
         var primed = false
         var played = 0, underruns = 0, drops = 0, lastLog = 0
         var peak: Float = 0
-        let log = ProcessInfo.processInfo.environment["MODELMAC_AUDIOLOG"] != nil
+        let log = ProcessInfo.processInfo.environment["SPOKE_AUDIOLOG"] != nil
         let node = AVAudioSourceNode(format: fmt) { _, _, frameCount, abl -> OSStatus in
             let out = UnsafeMutableAudioBufferListPointer(abl)
             let l = out[0].mData!.assumingMemoryBound(to: Float.self)
@@ -49,9 +49,9 @@ final class AudioOut {
             let got = primed ? read(tmp, n) : 0
             if got < n { if primed { underruns += 1 }; primed = false }  // underrun: wait for a new cushion
             played += got
-            if log && played - lastLog >= 5 * 48000 {                       // MODELMAC_AUDIOLOG: health every 5 s
+            if log && played - lastLog >= 5 * 48000 {                       // SPOKE_AUDIOLOG: health every 5 s
                 lastLog = played
-                NSLog("Model Mac %@: %.1f s played, %ld underruns, %ld drops, %ld queued, peak %.2f",
+                NSLog("Spoke %@: %.1f s played, %ld underruns, %ld drops, %ld queued, peak %.2f",
                       name, Double(played) / AudioOut.rate, underruns, drops, available(), peak)
                 peak = 0
             }
@@ -67,7 +67,7 @@ final class AudioOut {
             try engine.start()
             return true
         } catch {
-            NSLog("Model Mac: %@ audio output failed: %@", name, "\(error)")
+            NSLog("Spoke: %@ audio output failed: %@", name, "\(error)")
             return false
         }
     }

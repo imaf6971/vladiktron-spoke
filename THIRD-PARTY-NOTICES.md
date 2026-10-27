@@ -1,6 +1,6 @@
 # Third-party notices
 
-Model Mac is licensed under the GNU General Public License, version 2 only (`LICENSE`). It includes or builds on
+Vladiktron Spoke is licensed under the GNU General Public License, version 2 only (`LICENSE`). It includes or builds on
 the following. Elektron's firmware is not part of it: the app installs it from the user's own OS update file.
 
 | Component | Where | Licence |
@@ -10,7 +10,7 @@ the following. Elektron's firmware is not part of it: the app installs it from t
 | [elektron-model-tweaks](https://github.com/drumkilla/elektron-model-tweaks) (drumkilla) | `mtlib`, the SysEx, container and aPLib-variant code `native/mcfirmware.c` is ported from | MIT |
 | [elektron-firmware-tool](https://github.com/mischa85/elektron-firmware-tool) (Marcel Bierling) | The basis of `mtlib`'s container and codec code | MIT |
 
-The source for this app, including the Unicorn patches, is at https://github.com/imaf6971/model-mac.
+The source for this app, including the Unicorn patches, is at https://github.com/imaf6971/vladiktron-spoke.
 
 Model:Cycles and Elektron are trademarks of Elektron Music Machines MAV AB. This project is not affiliated with or
 endorsed by Elektron. The names are used only to say which device's OS it runs.

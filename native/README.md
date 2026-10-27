@@ -1,11 +1,11 @@
-# Model Mac — Model:Cycles on a Mac
+# Vladiktron Spoke — the Model:Cycles OS on a Mac
 
 Runs Elektron's own Model:Cycles OS 1.13 on a virtual board. The firmware comes from your
 `model-cycles_OS1.13.syx`; nothing from it is bundled.
 
 ```sh
 ./build.sh ../model-cycles_OS1.13.syx     # builds everything, installs your firmware files
-open "build/Model Mac.app"
+open "build/Vladiktron Spoke.app"
 ```
 
 Without the `.syx` (or on a Mac where it was never installed), the app asks for it on first run: choose
@@ -14,9 +14,11 @@ or the `.syx` inside it, or drop either on the window. Only Elektron's original 
 SHA-256 checked; other versions, modified OSes, the Model:Samples OS and damaged files each get their own message).
 **Model:Cycles → Install OS…** does the same later, for example to restore `flash.factory.bin`.
 
-Data lives in `~/Library/Application Support/ModelMac/` (menu **Model:Cycles → Reveal Data Folder**): `main_os.bin`
+Data lives in `~/Library/Application Support/Vladiktron Spoke/` (menu **Model:Cycles → Reveal Data Folder**): `main_os.bin`
 (decoded OS), `flash.bin` (boot flash, holds settings), `flash.factory.bin` (the untouched flash image, for Factory
-reset), `emmc.img` + `.extcsd` (the +Drive). `MODELMAC_DATA=/some/folder` points the app at another folder.
+reset), `emmc.img` + `.extcsd` (the +Drive). `SPOKE_DATA=/some/folder` points the app at another folder. The app
+used to be called Model Mac: on first launch it moves `ModelMac/` and its settings (bundle ID `local.modelmac.app`)
+over, unless the new folder already exists.
 
 **Quitting** powers the Model:Cycles off the way its power key does: the OS shows "Shutting down...", saves its
 working state (the active project) to the +Drive and powers off, which takes about two seconds. Only then does the
@@ -31,7 +33,7 @@ first, and shut the OS down cleanly before they change any files.
 | File | What |
 |---|---|
 | `mcboard.c/.h` | Virtual board: CPU (patched Unicorn), interrupt controllers, PIT and DMA timers, GPIO, SPI flash, eSDHC + eMMC (Samsung "4FTE4R" in pSLC mode), eDMA, front-panel bus, MIDI UART (UART9), USB device controller with a built-in USB host, audio-codec I2C stub |
-| `app/` | SwiftUI app: runs the board on its own thread, draws the 128×64 screen, plays the audio through Core Audio (`MODELMAC_AUDIOLOG=1` logs underruns, drops, queue depth and peak level every 5 s; `MODELMAC_TEST="8:play,20:out=BuiltInSpeakerDevice,30:out=,60:quit"` presses PLAY, routes USB audio and quits on a schedule, for scripted runs), MIDI as CoreMIDI ports, MiniLab 3 mapping (`MiniLab.swift`) |
+| `app/` | SwiftUI app: runs the board on its own thread, draws the 128×64 screen, plays the audio through Core Audio (`SPOKE_AUDIOLOG=1` logs underruns, drops, queue depth and peak level every 5 s; `SPOKE_TEST="8:play,20:out=BuiltInSpeakerDevice,30:out=,60:quit"` presses PLAY, routes USB audio and quits on a schedule, for scripted runs), MIDI as CoreMIDI ports, MiniLab 3 mapping (`MiniLab.swift`) |
 | `mcboot` | Headless runner: `./mcboot build/main_os.bin <flash> <emmc> [seconds] [screen.png]` |
 | `mcaudio_test`, `mcmidi_test`, `mcusb_test` | Headless checks: record the OS's output while playing; MIDI notes in on each channel, and what comes out; USB link, USB-MIDI and USB audio both ways, sample for sample (PASS/FAIL) |
 | `mcrt_test` | Headless real-time check (PASS/FAIL): `./mcrt_test build/main_os.bin <flash> <emmc> [seconds per phase]`. With the board on its own thread as in the app, it plays a pattern and reads the main output every 1 ms, with USB audio off, then with both streams on, then off again. Each phase fails if the output runs below 48 kHz, if a block arrives more than 10 ms late, or if a block comes out repeated (the same as the one or two before: a half of the OS's audio ring it had not rendered). Run it on an otherwise idle Mac. |
