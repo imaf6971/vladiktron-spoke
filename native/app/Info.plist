@@ -3,6 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key><string>Model Mac</string>
+    <key>NSHumanReadableCopyright</key><string>© 2026 Миронов Владислав Андреевич. Free software under the GNU GPL, version 2.</string>
     <key>CFBundleDisplayName</key><string>Model Mac</string>
     <key>CFBundleIdentifier</key><string>local.modelmac.app</string>
     <key>CFBundleExecutable</key><string>ModelMac</string>

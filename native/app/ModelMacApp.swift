@@ -51,6 +51,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) { board.stop() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    // MARK: About and licences
+
+    static let source = URL(string: "https://github.com/imaf6971/model-mac")!
+
+    static func showAbout() {
+        let body = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        let credits = NSMutableAttributedString()
+        func add(_ text: String, link: URL? = nil, bold: Bool = false) {
+            var attrs: [NSAttributedString.Key: Any] = [
+                .font: bold ? NSFont.boldSystemFont(ofSize: body.pointSize) : body, .foregroundColor: NSColor.labelColor]
+            if let link { attrs[.link] = link }
+            credits.append(NSAttributedString(string: text, attributes: attrs))
+        }
+        add("Runs Elektron's own Model:Cycles OS 1.13, installed from your own OS file; no part of it comes with the app.\n\n")
+        add("Free software under the GNU General Public License, version 2. Source, with the Unicorn patches: ")
+        add("github.com/imaf6971/model-mac", link: AppDelegate.source)
+        add("\n\nBuilt with ")
+        add("Unicorn", link: URL(string: "https://www.unicorn-engine.org/"))
+        add(" (GPL-2.0) and code after ")
+        add("Modded-Cycles", link: URL(string: "https://github.com/18nelli18/Modded-Cycles"))
+        add(", elektron-model-tweaks and elektron-firmware-tool (MIT). Help → Licences has the full texts.\n\n")
+        add("Model:Cycles and Elektron are trademarks of Elektron Music Machines MAV AB. Not affiliated with or endorsed by Elektron.")
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Opens the licence texts that build.sh puts in the bundle's Resources.
+    static func showLicences() {
+        let files = ["LICENSE", "THIRD-PARTY-NOTICES.md"].compactMap { Bundle.main.url(forResource: $0, withExtension: nil) }
+        guard !files.isEmpty else { NSWorkspace.shared.open(AppDelegate.source); return }
+        let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
+        NSWorkspace.shared.open(files, withApplicationAt: textEdit, configuration: NSWorkspace.OpenConfiguration())
+    }
+
     // MARK: the Model:Cycles menu
 
     @objc func revealDataFolder() {
@@ -121,6 +155,11 @@ struct ModelMacApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(replacing: .appInfo) { Button("About Model Mac") { AppDelegate.showAbout() } }
+            CommandGroup(replacing: .help) {
+                Button("Licences") { AppDelegate.showLicences() }
+                Button("Source Code") { NSWorkspace.shared.open(AppDelegate.source) }
+            }
             CommandMenu("Model:Cycles") {
                 Button("Install OS…") { delegate.installFirmware() }
                 Button("Reveal Data Folder") { delegate.revealDataFolder() }

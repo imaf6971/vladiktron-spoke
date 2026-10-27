@@ -77,6 +77,12 @@ first, and shut the OS down cleanly before they change any files.
   Knobs and faders send absolute values; each step becomes one detent. Other MiniLab programs (or controllers)
   need their CC numbers in `MiniLab.swift`.
 
+## Licence
+
+GPL-2.0-only (see `LICENSE` at the repository root); third-party code and its licences are listed in
+`THIRD-PARTY-NOTICES.md`. Model:Cycles and Elektron are trademarks of Elektron Music Machines MAV AB; this project
+is not affiliated with or endorsed by Elektron.
+
 ## Not done yet
 
 See [RELEASE.md](RELEASE.md) for everything between this and a release.

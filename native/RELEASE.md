@@ -11,19 +11,24 @@ instead of all of it. Everything below is still open, ordered by how much it blo
 ## 1. Release blockers
 
 ### Legal and licensing
-- **Unicorn is GPL-2.0, and it is linked statically.** Shipping the app means shipping it under GPL-2.0-compatible
-  terms, with source (including `patch_unicorn.py`'s changes). The licence needs to be chosen and written down
-  (`LICENSE`, about box, third-party notices).
-- **Code from Modded-Cycles is MIT, not GPL-3.0** (checked at the pinned revision 2594419: the repository's
-  `LICENSE`, and `tools/mtlib/` with its own MIT texts from drumkilla and Marcel Bierling; only one Python check
-  script there is GPL-3.0, and nothing here uses it). `mcfirmware.c` is a port of `mtlib` and is now in the app;
-  `mcengine.c` and the EMAC model in `patch_unicorn.py` follow Modded-Cycles too. The about box / third-party notices
-  must carry those MIT notices (Modded-Cycles contributors, drumkilla, Marcel Bierling).
-- **Elektron's firmware stays the user's.** The app must never bundle or download it. This is already true; keep it
-  true in the onboarding flow.
-- **Names and look.** "Model:Cycles", "Elektron" and a faithful copy of the panel are their trademarks and trade dress.
-  This needs a decision (legal advice, or asking Elektron) before anything is published. The app name, window title
-  and panel artwork may have to change.
+Done (2026-10-27): the project is GPL-2.0-only (`LICENSE` at the repository root, the same terms as Unicorn, which
+is linked statically). `THIRD-PARTY-NOTICES.md` lists Unicorn (GPL-2.0, GLib parts LGPL-2.0) and the MIT code this
+builds on, with the MIT texts: Modded-Cycles (`mcengine.c`, the EMAC model, OS addresses, and `mcfirmware.c` by way
+of `mtlib`), drumkilla's elektron-model-tweaks and Marcel Bierling's elektron-firmware-tool. Modded-Cycles is MIT,
+not GPL-3.0 as this file used to say (checked at the pinned revision 2594419; its one GPL-3.0 script is not used
+here). The app bundles both files (Help → Licences) and its About panel names the licence, the source and the
+trademark disclaimer.
+
+Decided: "Model:Cycles" and "Elektron" stay, used only to say which device's OS the app runs, as Modded-Cycles
+does; the app's own name is Model Mac, the panel carries its own wordmark, and the About panel and notices say it
+is not affiliated with Elektron. Still open:
+- **Source with each binary.** GPL-2.0 needs the complete source with a binary release, Unicorn included:
+  attach a source archive (this repository plus Unicorn 2.1.4 with `patch_unicorn.py` applied) to every release,
+  rather than relying on `build.sh` cloning Unicorn at build time.
+- **Elektron's firmware stays the user's.** The app must never bundle or download it. This is true today; keep it
+  true.
+- **The panel's look** follows the hardware closely (layout, colours, labels). That is the part of the trade dress
+  most likely to draw a complaint; change the artwork if Elektron ever asks.
 
 ### Onboarding
 Done: with no OS in its data folder the app shows a first-run screen (choose or drop the `.syx`, or Elektron's

@@ -69,7 +69,8 @@ final class Board: ObservableObject, @unchecked Sendable {
     }
 
     // Self-check: MODELMAC_TEST="8:play,20:out=BuiltInSpeakerDevice,30:out=,60:quit" runs these steps at the
-    // given seconds after launch: press PLAY, route USB audio out/in to a device UID (empty: nowhere), quit.
+    // given seconds after launch: press PLAY, route USB audio out/in to a device UID (empty: nowhere), open the
+    // About panel ("about"), quit.
     private func runTestScript() {
         guard let script = ProcessInfo.processInfo.environment["MODELMAC_TEST"] else { return }
         for step in script.split(separator: ",") {
@@ -84,6 +85,7 @@ final class Board: ObservableObject, @unchecked Sendable {
                 case "play": self.key(7, down: true); DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { self.key(7, down: false) }
                 case "out": self.usbAudio.outputUID = arg
                 case "in": self.usbAudio.inputUID = arg
+                case "about": AppDelegate.showAbout()
                 case "quit": RunLoop.main.perform { NSApp.terminate(nil) }   // not inside this main-queue
                                                                              // block: the shutdown replies on it
                 default: break

@@ -50,8 +50,9 @@ cc $CFLAGS -c mcboard.c -o build/obj/mcboard.o
 cc $CFLAGS -c mcfirmware.c -o build/obj/mcfirmware.o
 APP="build/Model Mac.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp app/Info.plist "$APP/Contents/Info.plist"
+cp ../LICENSE ../THIRD-PARTY-NOTICES.md "$APP/Contents/Resources/"
 swiftc -O -parse-as-library -import-objc-header app/Bridging.h app/*.swift build/obj/mcboard.o build/obj/mcfirmware.o \
     $UC/build/libunicorn.a -lz -o "$APP/Contents/MacOS/ModelMac"
 codesign --force -s - "$APP" 2> /dev/null
