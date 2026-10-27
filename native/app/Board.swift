@@ -1,5 +1,6 @@
 // Bridge to the C virtual board (mcboard.h): runs the OS on its own thread, publishes screen + LEDs.
 import AppKit
+import MCBoard
 import SwiftUI
 
 final class Board: ObservableObject, @unchecked Sendable {

@@ -3,6 +3,7 @@
 // the destinations and listen to the sources. A MiniLab 3, if one is connected, plays the board directly.
 import CoreMIDI
 import Foundation
+import MCBoard
 
 /// One connection: a CoreMIDI destination feeding the board, and a source carrying what the board sends.
 final class MidiPortPair {

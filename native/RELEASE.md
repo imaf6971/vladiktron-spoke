@@ -24,9 +24,9 @@ does; the app's own name is Vladiktron Spoke (renamed from Model Mac on 2026-10-
 and music software for clashes; trademark registers not yet searched), the panel carries its own wordmark and the
 label "Spoke", and the About panel and notices say it
 is not affiliated with Elektron. Still open:
-- **Source with each binary.** GPL-2.0 needs the complete source with a binary release, Unicorn included:
-  attach a source archive (this repository plus Unicorn 2.1.4 with `patch_unicorn.py` applied) to every release,
-  rather than relying on `build.sh` cloning Unicorn at build time.
+- **Source with each binary.** GPL-2.0 needs the complete source with a binary release, Unicorn included. Since
+  Unicorn is vendored (with its changes applied and listed in `vendor/`), the repository at the release tag is that
+  source: attach `git archive --format=zip -o vladiktron-spoke-<version>-source.zip <tag>` to every release.
 - **Elektron's firmware stays the user's.** The app must never bundle or download it. This is true today; keep it
   true.
 - **The panel's look** follows the hardware closely (layout, colours, labels). That is the part of the trade dress
@@ -46,13 +46,25 @@ Python or the Modded-Cycles clone for the firmware. What remains:
   Open panel and drag and drop have not been clicked through.
 
 ### Signing and distribution
-- Developer ID signing (the bundle ID is now `io.github.imaf6971.spoke`), hardened runtime and notarisation. Unicorn's JIT needs
-  `com.apple.security.cs.allow-jit` (and `MAP_JIT` on Apple Silicon). Verify it still runs once signed.
-- Build with an Xcode project or a Swift package instead of `swiftc` in a shell script, with Unicorn and its patches
-  pinned and vendored rather than cloned at build time (`build.sh` still needs git, Python, CMake and Ninja for
-  Unicorn).
-- Decide on architectures: currently tested only on Apple Silicon (M4 Pro), macOS 14+. Intel needs a test, or an
-  explicit "Apple Silicon only".
+Done (2026-10-27): Unicorn is vendored in `vendor/unicorn` (2.1.4 with this project's changes applied; `vendor/README.md`
+says what changed), so the build downloads nothing and needs only CMake and the Xcode command line tools: no git,
+Python or Ninja. The app is a Swift package (`Package.swift`: the C board as module `MCBoard`, the SwiftUI app as an
+executable target); `build.sh` builds Unicorn with CMake, runs `swift build`, wraps the bundle and signs it with the
+hardened runtime and `app/Spoke.entitlements` (`com.apple.security.cs.allow-jit`, and
+`com.apple.security.device.audio-input`, which the hardened runtime needs for the USB Audio input). Checked with an
+ad hoc signature: the OS boots and plays with no underruns, and quits cleanly. Signed without `allow-jit`, Unicorn
+stops at start-up ("Could not allocate dynamic translator buffer"), so the entitlement is what makes it work. CPU
+while playing is unchanged: 38–44 % of a core for the new build with or without the hardened runtime, 39–42 % for
+the old `swiftc` build (M4 Pro, measured back to back; runs right after a build read up to 59 %, for any build).
+What remains:
+- **Developer ID and notarisation** (needs a paid Apple Developer account): `SIGN_ID="Developer ID Application: …"
+  ./build.sh` signs with it (with the secure timestamp notarisation requires), then `ditto -c -k --keepParent "build/Vladiktron Spoke.app" Spoke.zip`, `xcrun notarytool submit
+  Spoke.zip --keychain-profile <profile> --wait` and `xcrun stapler staple "build/Vladiktron Spoke.app"`.
+- **The USB Audio input under the hardened runtime** has its entitlement, but has not been tried with a real input
+  since (macOS asks for microphone access again, under the new bundle ID).
+- **Architectures:** tested only on Apple Silicon (M4 Pro), macOS 14+. The build is arm64 only; Intel would need a
+  second Unicorn build and `lipo`, and a test. Otherwise say "Apple Silicon only".
+- **A DMG or zip** for downloads, and a version number scheme (`Info.plist` says 0.1 (1)).
 
 ## 2. Should be in 1.0
 

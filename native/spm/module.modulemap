@@ -1,0 +1,6 @@
+// The board's C interface as the Swift module "MCBoard" (Package.swift).
+module MCBoard {
+    header "../mcboard.h"
+    header "../mcfirmware.h"
+    export *
+}

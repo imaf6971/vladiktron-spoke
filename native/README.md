@@ -8,6 +8,12 @@ Runs Elektron's own Model:Cycles OS 1.13 on a virtual board. The firmware comes 
 open "build/Vladiktron Spoke.app"
 ```
 
+The build needs only CMake and the Xcode command line tools; everything else is in this repository, including
+Unicorn (`vendor/`). `build.sh` builds Unicorn with CMake, the app with Swift Package Manager (`Package.swift`; open
+it in Xcode to edit and debug), wraps it into a bundle and signs that with the hardened runtime and
+`app/Spoke.entitlements` (JIT for Unicorn, audio input for USB audio). The signature is ad hoc unless
+`SIGN_ID="Developer ID Application: …"` is set.
+
 Without the `.syx` (or on a Mac where it was never installed), the app asks for it on first run: choose
 `model-cycles_OS1.13.zip` as downloaded from [Elektron's support page](https://www.elektron.se/support-downloads/modelcycles#resources),
 or the `.syx` inside it, or drop either on the window. Only Elektron's original OS 1.13 is accepted (version and
@@ -41,7 +47,8 @@ first, and shut the OS down cleanly before they change any files.
 | eMMC log | eMMC errors (unanswered commands, accesses past the end of the card, failed image I/O) are always logged to stderr and counted in the status line. `MCB_EMMCLOG=1` logs every command. |
 | `mcshutdown_test` | Headless check (PASS/FAIL): `./mcshutdown_test build/main_os.bin build/flash.bin`. On a fresh +Drive in a temporary folder, it changes the project, powers off with the power key, boots again and checks that the change survived, with no eMMC errors. A control run shows that a hard stop loses the change. |
 | `mcengine.c`, `mcbench` | The six-voice synth engine alone (bit-exact with Modded-Cycles' Python model) |
-| `patch_unicorn.py` | Unicorn 2.1.4 fixes for ColdFire: EMAC maths, QEMU's own exceptions, IRQ lines, safe stops, an SR read that no longer changes the condition codes; speed: fast stores to RAM pages that hold no code, the JIT left executable for a whole run, no per-exit `isb`+register read in release builds |
+| `vendor/unicorn` | Unicorn 2.1.4 with this project's changes already applied (`vendor/README.md`, `vendor/unicorn-2.1.4.patch`) |
+| `patch_unicorn.py` | How those changes are made to a stock Unicorn 2.1.4: fixes for ColdFire: EMAC maths, QEMU's own exceptions, IRQ lines, safe stops, an SR read that no longer changes the condition codes; speed: fast stores to RAM pages that hold no code, the JIT left executable for a whole run, no per-exit `isb`+register read in release builds |
 | `mcfirmware.c/.h`, `mcinstall` | Decodes the `.syx` (SysEx packets and checksums, ELE3 container, aPLib-variant MAIN OS) and checks it is OS 1.13; a C port of `mtlib` (Modded-Cycles, MIT), used by the app and by `./mcinstall <syx> <dir>` |
 
 ## Playing it

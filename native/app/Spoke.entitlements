@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Unicorn translates the OS's ColdFire code into native code at run time (MAP_JIT pages). -->
+    <key>com.apple.security.cs.allow-jit</key><true/>
+    <!-- USB Audio menu: an audio input of this Mac can feed the Model:Cycles' USB audio input. -->
+    <key>com.apple.security.device.audio-input</key><true/>
+</dict>
+</plist>

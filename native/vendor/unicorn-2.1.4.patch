@@ -1,0 +1,623 @@
+diff --git a/qemu/accel/tcg/cpu-exec-common.c b/qemu/accel/tcg/cpu-exec-common.c
+index f1110b4..39175ef 100644
+--- a/qemu/accel/tcg/cpu-exec-common.c
++++ b/qemu/accel/tcg/cpu-exec-common.c
+@@ -36,10 +36,7 @@ void cpu_reloading_memory_map(void)
+ 
+ void cpu_loop_exit(CPUState *cpu)
+ {
+-    /* Unlock JIT write protect if applicable. */
+-    if (cpu->uc->nested_level == 1) {
+-        tb_exec_unlock(cpu->uc);
+-    }
++    /* Model:Cycles board: the JIT stays executable until the run ends (see patch_unicorn.py). */
+     /* Undo the setting in cpu_tb_exec.  */
+     cpu->can_do_io = 1;
+     siglongjmp(cpu->uc->jmp_bufs[cpu->uc->nested_level - 1], 1);
+diff --git a/qemu/accel/tcg/cpu-exec.c b/qemu/accel/tcg/cpu-exec.c
+index 77168f3..4dea050 100644
+--- a/qemu/accel/tcg/cpu-exec.c
++++ b/qemu/accel/tcg/cpu-exec.c
+@@ -58,10 +58,7 @@ static inline tcg_target_ulong cpu_tb_exec(CPUState *cpu, TranslationBlock *itb)
+     UC_TRACE_START(UC_TRACE_TB_EXEC);
+     tb_exec_lock(cpu->uc);
+     ret = tcg_qemu_tb_exec(env, tb_ptr);
+-    if (cpu->uc->nested_level == 1) {
+-        // Only unlock (allow writing to JIT area) if we are the outmost uc_emu_start
+-        tb_exec_unlock(cpu->uc);
+-    }
++    /* Model:Cycles board: the JIT stays executable until the run ends (see patch_unicorn.py). */
+     UC_TRACE_END(UC_TRACE_TB_EXEC, "[uc] exec tb 0x%" PRIx64 ": ", itb->pc);
+ 
+     cpu->can_do_io = 1;
+@@ -401,6 +398,16 @@ static inline bool cpu_handle_exception(CPUState *cpu, int *ret)
+ #if defined(TARGET_PPC)
+         CPUPPCState *env = &(POWERPC_CPU(uc->cpu)->env);
+         env->nip += 4;
++#endif
++#if defined(TARGET_M68K)
++        /* Model:Cycles board: QEMU's ColdFire exception model is complete (format word, VBR, RTE,
++           trap return address), so use it rather than handing every exception to a hook. */
++        {
++            CPUClass *cc = CPU_GET_CLASS(cpu);
++            cc->do_interrupt(cpu);
++            cpu->exception_index = -1;
++            return false;
++        }
+ #endif
+         // Unicorn: call registered interrupt callbacks
+         catched = false;
+@@ -493,6 +500,15 @@ static inline bool cpu_handle_interrupt(CPUState *cpu,
+         }
+     }
+ 
++    /* Model:Cycles board: stop_request never lost (see patch_unicorn.py). */
++    if (unlikely(cpu->uc->stop_request)) {
++        cpu->exit_request = 0;
++        if (cpu->exception_index == -1) {
++            cpu->exception_index = EXCP_INTERRUPT;
++        }
++        return true;
++    }
++
+     /* Finally, check if we need to exit to the main loop.  */
+     if (unlikely(cpu->exit_request)) {
+         cpu->exit_request = 0;
+diff --git a/qemu/accel/tcg/cputlb.c b/qemu/accel/tcg/cputlb.c
+index 3d0bebd..8a4132d 100644
+--- a/qemu/accel/tcg/cputlb.c
++++ b/qemu/accel/tcg/cputlb.c
+@@ -616,6 +616,11 @@ void tlb_protect_code(struct uc_struct *uc, ram_addr_t ram_addr)
+ {
+     cpu_physical_memory_test_and_clear_dirty(ram_addr, TARGET_PAGE_SIZE,
+                                              DIRTY_MEMORY_CODE);
++    /* Model:Cycles board: writes to this page are checked for self-modifying code again. */
++    if (uc->cpu) {
++        tlb_reset_dirty(uc->cpu, (ram_addr_t)(uintptr_t)qemu_map_ram_ptr(uc, NULL, ram_addr & TARGET_PAGE_MASK),
++                        TARGET_PAGE_SIZE);
++    }
+ }
+ 
+ /* update the TLB so that writes in physical page 'phys_addr' are no longer
+@@ -1186,6 +1191,16 @@ tb_page_addr_t get_page_addr_code(CPUArchState *env, target_ulong addr)
+     return get_page_addr_code_hostp(env, addr, NULL);
+ }
+ 
++bool uc_ram_page_has_code(struct uc_struct *uc, tb_page_addr_t addr);
++/* Model:Cycles board: hooks that need every access to this RAM address on the slow path (unmapped and
++   protection hooks never fire on mapped RAM). */
++static bool uc_rw_hook_installed(struct uc_struct *uc, hwaddr paddr)
++{
++    return HOOK_EXISTS_BOUNDED(uc, UC_HOOK_MEM_READ, paddr) ||
++           HOOK_EXISTS_BOUNDED(uc, UC_HOOK_MEM_READ_AFTER, paddr) ||
++           HOOK_EXISTS_BOUNDED(uc, UC_HOOK_MEM_WRITE, paddr);
++}
++
+ static void notdirty_write(CPUState *cpu, vaddr mem_vaddr, unsigned size,
+                            CPUIOTLBEntry *iotlbentry, uintptr_t retaddr,
+                            CPUTLBEntry *tlbe)
+@@ -1209,8 +1224,8 @@ static void notdirty_write(CPUState *cpu, vaddr mem_vaddr, unsigned size,
+     // - or doing snapshot
+     // , then never clean the tlb
+     if (!(!mr || (tlbe->addr_write != -1 && mr->priority < cpu->uc->snapshot_level)) &&
+-            !(tlbe->addr_code != -1) &&
+-            !uc_mem_hook_installed(cpu->uc, tlbe->paddr | (mem_vaddr & ~TARGET_PAGE_MASK))) {
++            !uc_ram_page_has_code(cpu->uc, ram_addr) &&
++            !uc_rw_hook_installed(cpu->uc, tlbe->paddr | (mem_vaddr & ~TARGET_PAGE_MASK))) {
+         tlb_set_dirty(cpu, mem_vaddr);
+     }
+ }
+diff --git a/qemu/accel/tcg/tcg-all.c b/qemu/accel/tcg/tcg-all.c
+index 2425c7d..bc42634 100644
+--- a/qemu/accel/tcg/tcg-all.c
++++ b/qemu/accel/tcg/tcg-all.c
+@@ -34,6 +34,8 @@
+ static void tcg_handle_interrupt(CPUState *cpu, int mask)
+ {
+     cpu->interrupt_request |= mask;
++    /* Model:Cycles board: kick the CPU so a running block chain notices the interrupt. */
++    cpu_neg(cpu)->icount_decr.u16.high = -1;
+ }
+ 
+ CPUInterruptHandler cpu_interrupt_handler = tcg_handle_interrupt;
+diff --git a/qemu/accel/tcg/tcg-runtime.c b/qemu/accel/tcg/tcg-runtime.c
+index 777287a..a65b8eb 100644
+--- a/qemu/accel/tcg/tcg-runtime.c
++++ b/qemu/accel/tcg/tcg-runtime.c
+@@ -171,11 +171,7 @@ void HELPER(check_exit_request)(void *p, uint32_t in_delay_slot) {
+     if (cpu_loop_exit_requested(uc->cpu) && !in_delay_slot) {
+         // There are stil something we have to before exiting to be compatible with previous behaviors
+ 
+-        // from cpu_tb_exec
+-        if (uc->nested_level == 1) {
+-            // Only unlock (allow writing to JIT area) if we are the outmost uc_emu_start
+-            tb_exec_unlock(uc);
+-        }
++        /* Model:Cycles board: the JIT stays executable until the run ends (see patch_unicorn.py). */
+         uc->cpu->tcg_exit_req = 0;
+ 
+         if (uc->skip_sync_pc_on_exit) {
+diff --git a/qemu/accel/tcg/translate-all.c b/qemu/accel/tcg/translate-all.c
+index 71b6b2b..004395b 100644
+--- a/qemu/accel/tcg/translate-all.c
++++ b/qemu/accel/tcg/translate-all.c
+@@ -2206,3 +2206,10 @@ void tb_exec_unlock(struct uc_struct *uc)
+ {
+     tb_exec_change(uc, false);
+ }
++
++/* Model:Cycles board: does this RAM page hold translated code? (see patch_unicorn.py) */
++bool uc_ram_page_has_code(struct uc_struct *uc, tb_page_addr_t addr)
++{
++    PageDesc *p = page_find(uc, addr >> TARGET_PAGE_BITS);
++    return p && p->first_tb;
++}
+diff --git a/qemu/include/tcg/tcg-apple-jit.h b/qemu/include/tcg/tcg-apple-jit.h
+index 4ace2c7..219204d 100644
+--- a/qemu/include/tcg/tcg-apple-jit.h
++++ b/qemu/include/tcg/tcg-apple-jit.h
+@@ -71,6 +71,10 @@ QEMU_UNUSED_FUNC static inline bool thread_executable()
+ }
+ 
+ static inline void assert_executable(bool executable) {
++#ifdef NDEBUG   /* Model:Cycles board: release builds skip the check (see patch_unicorn.py) */
++    (void)executable;
++    return;
++#endif
+     if (!pthread_jit_write_protect_supported_np()) {
+         return;
+     }
+diff --git a/qemu/softmmu/cpus.c b/qemu/softmmu/cpus.c
+index afb8bbe..4aef28f 100644
+--- a/qemu/softmmu/cpus.c
++++ b/qemu/softmmu/cpus.c
+@@ -217,6 +217,10 @@ void resume_all_vcpus(struct uc_struct* uc)
+             break;
+         }
+     }
++    /* Model:Cycles board: the run is over: JIT writable again, as Unicorn leaves it (see patch_unicorn.py). */
++    if (uc->nested_level == 1) {
++        tb_exec_unlock(uc);
++    }
+ 
+     // clear the cache of the exits address, since the generated code
+     // at that address is to exit emulation, but not for the instruction there.
+diff --git a/qemu/target/m68k/cpu.c b/qemu/target/m68k/cpu.c
+index 6b636b8..5d5bf1e 100644
+--- a/qemu/target/m68k/cpu.c
++++ b/qemu/target/m68k/cpu.c
+@@ -61,6 +61,7 @@ static void m68k_cpu_reset(CPUState *dev)
+ 
+     /* TODO: We should set PC from the interrupt vector.  */
+     env->pc = 0;
++    env->mac_mask = 0xffffffff;
+ }
+ 
+ /* CPU models */
+diff --git a/qemu/target/m68k/helper.h b/qemu/target/m68k/helper.h
+index 413f88d..5276865 100644
+--- a/qemu/target/m68k/helper.h
++++ b/qemu/target/m68k/helper.h
+@@ -129,3 +129,6 @@ DEF_HELPER_4(chk2, void, env, s32, s32, s32)
+ DEF_HELPER_3(ptest, void, env, i32, i32)
+ DEF_HELPER_3(pflush, void, env, i32, i32)
+ DEF_HELPER_FLAGS_1(reset, TCG_CALL_NO_RWG, void, env)
++DEF_HELPER_4(cfmac, void, env, i32, i32, i32)
++DEF_HELPER_2(cfmac_get, i32, env, i32)
++DEF_HELPER_3(cfmac_set, void, env, i32, i32)
+diff --git a/qemu/target/m68k/op_helper.c b/qemu/target/m68k/op_helper.c
+index 91c504f..0f3cb14 100644
+--- a/qemu/target/m68k/op_helper.c
++++ b/qemu/target/m68k/op_helper.c
+@@ -998,3 +998,74 @@ void HELPER(chk2)(CPUM68KState *env, int32_t val, int32_t lb, int32_t ub)
+         cpu_loop_exit(cs);
+     }
+ }
++
++/* ---- EMAC model matching Modded-Cycles emac.py (see patch_unicorn.py) ---- */
++/* f: [1:0] acc, [2] sub, [3] word, [4] Rx upper, [5] Ry upper, [7:6] scale (1 = <<1, 3 = >>1),
++      [8] dual, [10:9] acc2, [11] sub2 */
++void HELPER(cfmac)(CPUM68KState *env, uint32_t rx, uint32_t ry, uint32_t f)
++{
++    int uns = (env->macsr & MACSR_SU) != 0;
++    int frac = (env->macsr & MACSR_FI) != 0;
++    __int128 a, b, p;
++    int64_t q;
++    if (f & 8) {
++        uint32_t x = ((f & 0x10) ? rx >> 16 : rx) & 0xffff;
++        uint32_t y = ((f & 0x20) ? ry >> 16 : ry) & 0xffff;
++        a = uns ? (__int128)x : (__int128)(int16_t)x;
++        b = uns ? (__int128)y : (__int128)(int16_t)y;
++        p = a * b;
++        if (frac) {
++            p *= ((__int128)1 << 32);
++        }
++    } else {
++        a = uns ? (__int128)rx : (__int128)(int32_t)rx;
++        b = uns ? (__int128)ry : (__int128)(int32_t)ry;
++        p = a * b;
++    }
++    switch ((f >> 6) & 3) {
++    case 1: p *= 2; break;
++    case 3: p >>= 1; break;
++    }
++    if (frac) {
++        p >>= 23;
++    }
++    q = (int64_t)p;
++    if (f & 4) {
++        env->macc[f & 3] -= q;
++    } else {
++        env->macc[f & 3] += q;
++    }
++    if (f & 0x100) {
++        int a2 = (f >> 9) & 3;
++        if (f & 0x800) {
++            env->macc[a2] -= q;
++        } else {
++            env->macc[a2] += q;
++        }
++    }
++}
++
++uint32_t HELPER(cfmac_get)(CPUM68KState *env, uint32_t acc)
++{
++    int64_t a = (int64_t)env->macc[acc & 3];
++    int64_t v;
++    if (env->macsr & MACSR_FI) {
++        v = (env->macsr & MACSR_RT) ? (a + 128) >> 8 : a >> 8;
++    } else {
++        v = a;
++    }
++    if (env->macsr & MACSR_OMC) {
++        if (v > 0x7fffffffLL) {
++            v = 0x7fffffffLL;
++        } else if (v < -0x80000000LL) {
++            v = -0x80000000LL;
++        }
++    }
++    return (uint32_t)v;
++}
++
++void HELPER(cfmac_set)(CPUM68KState *env, uint32_t val, uint32_t acc)
++{
++    int64_t v = (int32_t)val;
++    env->macc[acc & 3] = (env->macsr & MACSR_FI) ? v * 256 : v;
++}
+diff --git a/qemu/target/m68k/translate.c b/qemu/target/m68k/translate.c
+index 5b9a74c..a010d64 100644
+--- a/qemu/target/m68k/translate.c
++++ b/qemu/target/m68k/translate.c
+@@ -5701,38 +5701,30 @@ DISAS_INSN(mac)
+     TCGv ry;
+     uint16_t ext;
+     int acc;
+-    TCGv tmp;
++    TCGv tmp = NULL;
+     TCGv addr;
+     TCGv loadval;
+     int dual;
+-    TCGv saved_flags;
+-
+-    if (!s->done_mac) {
+-        s->mactmp = tcg_temp_new_i64(tcg_ctx);
+-        s->done_mac = 1;
+-    }
++    uint32_t f;
+ 
+     ext = read_im16(env, s);
+ 
+     acc = ((insn >> 7) & 1) | ((ext >> 3) & 2);
+-    dual = ((insn & 0x30) != 0 && (ext & 3) != 0);
+-    if (dual && !m68k_feature(s->env, M68K_FEATURE_CF_EMAC_B)) {
+-        disas_undef(env, s, insn);
+-        return;
+-    }
++    /* No dual accumulate: in MAC-with-load, ext bits 3:0 are Ry, not a second accumulator (stock QEMU
++       mistook them for EMAC_B dual-accumulate bits and added the product back). */
++    dual = 0;
+     if (insn & 0x30) {
+-        /* MAC with load.  */
++        /* MAC with load: the mask applies only when the instruction asks for it (ext bit 5). */
+         tmp = gen_lea(env, s, insn, OS_LONG);
+-        addr = tcg_temp_new(tcg_ctx);
+-        tcg_gen_and_i32(tcg_ctx, addr, tmp, QREG_MAC_MASK);
+-        /*
+-         * Load the value now to ensure correct exception behavior.
+-         * Perform writeback after reading the MAC inputs.
+-         */
++        if (ext & 0x20) {
++            addr = tcg_temp_new(tcg_ctx);
++            tcg_gen_and_i32(tcg_ctx, addr, tmp, QREG_MAC_MASK);
++        } else {
++            addr = tmp;
++        }
+         loadval = gen_load(s, OS_LONG, addr, 0, IS_USER(s));
+-
+         acc ^= 1;
+-        rx = (ext & 0x8000) ? AREG(ext, 12) : DREG(insn, 12);
++        rx = (ext & 0x8000) ? AREG(ext, 12) : DREG(ext, 12);
+         ry = (ext & 8) ? AREG(ext, 0) : DREG(ext, 0);
+     } else {
+         loadval = addr = tcg_ctx->NULL_QREG;
+@@ -5740,125 +5732,44 @@ DISAS_INSN(mac)
+         ry = (insn & 8) ? AREG(insn, 0) : DREG(insn, 0);
+     }
+ 
+-    gen_mac_clear_flags(tcg_ctx);
+-#if 0
+-    l1 = -1;
+-    /* Disabled because conditional branches clobber temporary vars.  */
+-    if ((s->env->macsr & MACSR_OMC) != 0 && !dual) {
+-        /* Skip the multiply if we know we will ignore it.  */
+-        l1 = gen_new_label(tcg_ctx);
+-        tmp = tcg_temp_new(tcg_ctx);
+-        tcg_gen_andi_i32(tcg_ctx, tmp, QREG_MACSR, 1 << (acc + 8));
+-        gen_op_jmp_nz32(tmp, l1);
++    f = acc;
++    /* msac: the subtract flag is bit 8 of the extension word (stock QEMU read the opcode word). */
++    if (ext & 0x100) {
++        f |= 4;
+     }
+-#endif
+-
+     if ((ext & 0x0800) == 0) {
+-        /* Word.  */
+-        rx = gen_mac_extract_word(s, rx, (ext & 0x80) != 0);
+-        ry = gen_mac_extract_word(s, ry, (ext & 0x40) != 0);
+-    }
+-    if (s->env->macsr & MACSR_FI) {
+-        gen_helper_macmulf(tcg_ctx, s->mactmp, tcg_ctx->cpu_env, rx, ry);
+-    } else {
+-        if (s->env->macsr & MACSR_SU)
+-            gen_helper_macmuls(tcg_ctx, s->mactmp, tcg_ctx->cpu_env, rx, ry);
+-        else
+-            gen_helper_macmulu(tcg_ctx, s->mactmp, tcg_ctx->cpu_env, rx, ry);
+-        switch ((ext >> 9) & 3) {
+-        case 1:
+-            tcg_gen_shli_i64(tcg_ctx, s->mactmp, s->mactmp, 1);
+-            break;
+-        case 3:
+-            tcg_gen_shri_i64(tcg_ctx, s->mactmp, s->mactmp, 1);
+-            break;
++        f |= 8;
++        if (ext & 0x80) {
++            f |= 0x10;
++        }
++        if (ext & 0x40) {
++            f |= 0x20;
+         }
+     }
+-
++    f |= ((ext >> 9) & 3) << 6;
+     if (dual) {
+-        /* Save the overflow flag from the multiply.  */
+-        saved_flags = tcg_temp_new(tcg_ctx);
+-        tcg_gen_mov_i32(tcg_ctx, saved_flags, QREG_MACSR);
+-    } else {
+-        saved_flags = tcg_ctx->NULL_QREG;
+-    }
+-
+-#if 0
+-    /* Disabled because conditional branches clobber temporary vars.  */
+-    if ((s->env->macsr & MACSR_OMC) != 0 && dual) {
+-        /* Skip the accumulate if the value is already saturated.  */
+-        l1 = gen_new_label(tcg_ctx);
+-        tmp = tcg_temp_new(tcg_ctx);
+-        gen_op_and32(tmp, QREG_MACSR, tcg_const_i32(tcg_ctx, MACSR_PAV0 << acc));
+-        gen_op_jmp_nz32(tmp, l1);
+-    }
+-#endif
+-
+-    if (insn & 0x100)
+-        tcg_gen_sub_i64(tcg_ctx, MACREG(acc), MACREG(acc), s->mactmp);
+-    else
+-        tcg_gen_add_i64(tcg_ctx, MACREG(acc), MACREG(acc), s->mactmp);
+-
+-    if (s->env->macsr & MACSR_FI)
+-        gen_helper_macsatf(tcg_ctx, tcg_ctx->cpu_env, tcg_const_i32(tcg_ctx, acc));
+-    else if (s->env->macsr & MACSR_SU)
+-        gen_helper_macsats(tcg_ctx, tcg_ctx->cpu_env, tcg_const_i32(tcg_ctx, acc));
+-    else
+-        gen_helper_macsatu(tcg_ctx, tcg_ctx->cpu_env, tcg_const_i32(tcg_ctx, acc));
+-
+-#if 0
+-    /* Disabled because conditional branches clobber temporary vars.  */
+-    if (l1 != -1)
+-        gen_set_label(tcg_ctx, l1);
+-#endif
+-
+-    if (dual) {
+-        /* Dual accumulate variant.  */
+-        acc = (ext >> 2) & 3;
+-        /* Restore the overflow flag from the multiplier.  */
+-        tcg_gen_mov_i32(tcg_ctx, QREG_MACSR, saved_flags);
+-#if 0
+-        /* Disabled because conditional branches clobber temporary vars.  */
+-        if ((s->env->macsr & MACSR_OMC) != 0) {
+-            /* Skip the accumulate if the value is already saturated.  */
+-            l1 = gen_new_label(tcg_ctx);
+-            tmp = tcg_temp_new(tcg_ctx);
+-            gen_op_and32(tmp, QREG_MACSR, tcg_const_i32(tcg_ctx, MACSR_PAV0 << acc));
+-            gen_op_jmp_nz32(tmp, l1);
++        f |= 0x100 | (((ext >> 2) & 3) << 9);
++        if (ext & 2) {
++            f |= 0x800;
+         }
+-#endif
+-        if (ext & 2)
+-            tcg_gen_sub_i64(tcg_ctx, MACREG(acc), MACREG(acc), s->mactmp);
+-        else
+-            tcg_gen_add_i64(tcg_ctx, MACREG(acc), MACREG(acc), s->mactmp);
+-        if (s->env->macsr & MACSR_FI)
+-            gen_helper_macsatf(tcg_ctx, tcg_ctx->cpu_env, tcg_const_i32(tcg_ctx, acc));
+-        else if (s->env->macsr & MACSR_SU)
+-            gen_helper_macsats(tcg_ctx, tcg_ctx->cpu_env, tcg_const_i32(tcg_ctx, acc));
+-        else
+-            gen_helper_macsatu(tcg_ctx, tcg_ctx->cpu_env, tcg_const_i32(tcg_ctx, acc));
+-#if 0
+-        /* Disabled because conditional branches clobber temporary vars.  */
+-        if (l1 != -1)
+-            gen_set_label(tcg_ctx, l1);
+-#endif
+     }
+-    gen_helper_mac_set_flags(tcg_ctx, tcg_ctx->cpu_env, tcg_const_i32(tcg_ctx, acc));
++    {
++        TCGv tf = tcg_const_i32(tcg_ctx, f);
++        gen_helper_cfmac(tcg_ctx, tcg_ctx->cpu_env, rx, ry, tf);
++        tcg_temp_free(tcg_ctx, tf);
++    }
+ 
+     if (insn & 0x30) {
+         TCGv rw;
+         rw = (insn & 0x40) ? AREG(insn, 9) : DREG(insn, 9);
+         tcg_gen_mov_i32(tcg_ctx, rw, loadval);
+-        /*
+-         * FIXME: Should address writeback happen with the masked or
+-         * unmasked value?
+-         */
++        /* Address writeback uses the unmasked address (emac.py). */
+         switch ((insn >> 3) & 7) {
+         case 3: /* Post-increment.  */
+-            tcg_gen_addi_i32(tcg_ctx, AREG(insn, 0), addr, 4);
++            tcg_gen_addi_i32(tcg_ctx, AREG(insn, 0), tmp, 4);
+             break;
+         case 4: /* Pre-decrement.  */
+-            tcg_gen_mov_i32(tcg_ctx, AREG(insn, 0), addr);
++            tcg_gen_mov_i32(tcg_ctx, AREG(insn, 0), tmp);
+         }
+         tcg_temp_free(tcg_ctx, loadval);
+     }
+@@ -5868,38 +5779,23 @@ DISAS_INSN(from_mac)
+ {
+     TCGContext *tcg_ctx = s->uc->tcg_ctx;
+     TCGv rx;
+-    TCGv_i64 acc;
+     int accnum;
++    TCGv ta;
+ 
+     rx = (insn & 8) ? AREG(insn, 0) : DREG(insn, 0);
+     accnum = (insn >> 9) & 3;
+-    acc = MACREG(accnum);
+-    if (s->env->macsr & MACSR_FI) {
+-        gen_helper_get_macf(tcg_ctx, rx, tcg_ctx->cpu_env, acc);
+-    } else if ((s->env->macsr & MACSR_OMC) == 0) {
+-        tcg_gen_extrl_i64_i32(tcg_ctx, rx, acc);
+-    } else if (s->env->macsr & MACSR_SU) {
+-        gen_helper_get_macs(tcg_ctx, rx, acc);
+-    } else {
+-        gen_helper_get_macu(tcg_ctx, rx, acc);
+-    }
++    ta = tcg_const_i32(tcg_ctx, accnum);
++    gen_helper_cfmac_get(tcg_ctx, rx, tcg_ctx->cpu_env, ta);
++    tcg_temp_free(tcg_ctx, ta);
+     if (insn & 0x40) {
+-        tcg_gen_movi_i64(tcg_ctx, acc, 0);
+-        tcg_gen_andi_i32(tcg_ctx, QREG_MACSR, QREG_MACSR, ~(MACSR_PAV0 << accnum));
++        tcg_gen_movi_i64(tcg_ctx, MACREG(accnum), 0);
+     }
+ }
+ 
+ DISAS_INSN(move_mac)
+ {
+     TCGContext *tcg_ctx = s->uc->tcg_ctx;
+-    /* FIXME: This can be done without a helper.  */
+-    int src;
+-    TCGv dest;
+-    src = insn & 3;
+-    dest = tcg_const_i32(tcg_ctx, (insn >> 9) & 3);
+-    gen_helper_mac_move(tcg_ctx, tcg_ctx->cpu_env, dest, tcg_const_i32(tcg_ctx, src));
+-    gen_mac_clear_flags(tcg_ctx);
+-    gen_helper_mac_set_flags(tcg_ctx, tcg_ctx->cpu_env, dest);
++    tcg_gen_mov_i64(tcg_ctx, MACREG((insn >> 9) & 3), MACREG(insn & 3));
+ }
+ 
+ DISAS_INSN(from_macsr)
+@@ -5945,23 +5841,14 @@ DISAS_INSN(macsr_to_ccr)
+ DISAS_INSN(to_mac)
+ {
+     TCGContext *tcg_ctx = s->uc->tcg_ctx;
+-    TCGv_i64 acc;
+     TCGv val;
++    TCGv ta;
+     int accnum;
+     accnum = (insn >> 9) & 3;
+-    acc = MACREG(accnum);
+     SRC_EA(env, val, OS_LONG, 0, NULL);
+-    if (s->env->macsr & MACSR_FI) {
+-        tcg_gen_ext_i32_i64(tcg_ctx, acc, val);
+-        tcg_gen_shli_i64(tcg_ctx, acc, acc, 8);
+-    } else if (s->env->macsr & MACSR_SU) {
+-        tcg_gen_ext_i32_i64(tcg_ctx, acc, val);
+-    } else {
+-        tcg_gen_extu_i32_i64(tcg_ctx, acc, val);
+-    }
+-    tcg_gen_andi_i32(tcg_ctx, QREG_MACSR, QREG_MACSR, ~(MACSR_PAV0 << accnum));
+-    gen_mac_clear_flags(tcg_ctx);
+-    gen_helper_mac_set_flags(tcg_ctx, tcg_ctx->cpu_env, tcg_const_i32(tcg_ctx, accnum));
++    ta = tcg_const_i32(tcg_ctx, accnum);
++    gen_helper_cfmac_set(tcg_ctx, tcg_ctx->cpu_env, val, ta);
++    tcg_temp_free(tcg_ctx, ta);
+ }
+ 
+ DISAS_INSN(to_macsr)
+@@ -5969,8 +5856,7 @@ DISAS_INSN(to_macsr)
+     TCGContext *tcg_ctx = s->uc->tcg_ctx;
+     TCGv val;
+     SRC_EA(env, val, OS_LONG, 0, NULL);
+-    gen_helper_set_macsr(tcg_ctx, tcg_ctx->cpu_env, val);
+-    gen_exit_tb(s);
++    tcg_gen_andi_i32(tcg_ctx, QREG_MACSR, val, 0xff);
+ }
+ 
+ DISAS_INSN(to_mask)
+diff --git a/qemu/target/m68k/unicorn.c b/qemu/target/m68k/unicorn.c
+index 42ef1ff..fe06993 100644
+--- a/qemu/target/m68k/unicorn.c
++++ b/qemu/target/m68k/unicorn.c
+@@ -72,7 +72,7 @@ uc_err reg_read(void *_env, int mode, unsigned int regid, void *value,
+             break;
+         case UC_M68K_REG_SR:
+             CHECK_REG_TYPE(uint32_t);
+-            env->cc_op = CC_OP_FLAGS;
++            /* Model:Cycles board: a read leaves cc_op alone (see patch_unicorn.py). */
+             *(uint32_t *)value = cpu_m68k_get_sr(env);
+             break;
+         case UC_M68K_REG_CR_SFC:
+@@ -262,3 +262,21 @@ void uc_init(struct uc_struct *uc)
+     uc->cpu_context_size = offsetof(CPUM68KState, end_reset_fields);
+     uc_common_init(uc);
+ }
++
++/* Model:Cycles board: drive the CPU's interrupt request (level 0 = none). The CPU takes it at the next
++   translation-block boundary when level > SR.I, vectoring through VBR. */
++void uc_m68k_set_irq(uc_engine *uc, int level, int vector)
++{
++    M68kCPU *cpu = M68K_CPU(uc->cpu);
++    m68k_set_irq_level(cpu, level, (uint8_t)vector);
++}
++
++/* Model:Cycles board: end the current uc_emu_start at the next block boundary. Safe to call from another
++   thread repeatedly; a kick that lands between runs only shortens the next one. */
++void uc_m68k_kick(uc_engine *uc)
++{
++    uc->stop_request = true;
++    if (uc->cpu) {
++        cpu_exit(uc->cpu);
++    }
++}
+diff --git a/qemu/tcg/tcg-op.c b/qemu/tcg/tcg-op.c
+index d0223ea..4414d4d 100644
+--- a/qemu/tcg/tcg-op.c
++++ b/qemu/tcg/tcg-op.c
+@@ -2858,6 +2858,10 @@ void check_exit_request(TCGContext *tcg_ctx)
+     if (tcg_ctx->uc->no_exit_request) {
+         return;
+     }
++    /* Model:Cycles board: never rewind a half-done instruction on m68k (see patch_unicorn.py). */
++    if (tcg_ctx->uc->arch == UC_ARCH_M68K) {
++        return;
++    }
+ 
+     TCGv_ptr puc = tcg_const_ptr(tcg_ctx, tcg_ctx->uc);
+     TCGv_i32 tmp = tcg_const_i32(tcg_ctx, 0);

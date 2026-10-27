@@ -4,6 +4,7 @@
 // like) so a DAW can record the Model:Cycles, or play into it. Each stream runs only while it is routed.
 import AVFoundation
 import CoreAudio
+import MCBoard
 
 struct AudioDevice: Hashable, Identifiable {
     let id: AudioDeviceID
