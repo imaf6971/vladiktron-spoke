@@ -12,6 +12,7 @@ final class Board: ObservableObject, @unchecked Sendable {
 
     private var board: OpaquePointer?
     private var thread: Thread?
+    private var activity: NSObjectProtocol?             // keeps App Nap away while the board runs
     private var timer: Timer?
     private var audio: AudioOut?
     let usbAudio = UsbAudio()                           // USB audio routes (the USB Audio menu)
@@ -40,6 +41,10 @@ final class Board: ObservableObject, @unchecked Sendable {
             return
         }
         board = b
+        // App Nap would throttle the CPU thread's timers while the window is hidden, and the audio and MIDI with
+        // them. The Mac may still sleep when idle, as it may with a synth plugged in.
+        activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
+                                                         reason: "Model:Cycles is running")
         let t = Thread { [b] in _ = mcb_run(b, 0) }
         t.name = "Model:Cycles CPU"
         t.qualityOfService = .userInteractive
@@ -116,6 +121,8 @@ final class Board: ObservableObject, @unchecked Sendable {
         thread = nil
         mcb_destroy(b)
         board = nil
+        if let activity { ProcessInfo.processInfo.endActivity(activity) }
+        activity = nil
     }
 
     /// Shuts down cleanly, runs `change` on the data folder (with the board closed), then boots again.

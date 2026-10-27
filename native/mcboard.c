@@ -40,6 +40,16 @@ void uc_m68k_kick(uc_engine *uc);
 // latch) and spins at 0x400e1e38 for good.
 #define PORTA_POWER_KEY 0x04
 #define POWER_OFF_SPIN 0x400e1e38u
+// Idle: once started, the OS does all its work in interrupts (timers, audio render, USB, MIDI); the boot code
+// ends in a branch to itself at IDLE_PC. When the CPU gets there, nothing runs until the next interrupt, so the
+// CPU thread sleeps until the next timer, audio block, USB microframe or MIDI byte is due, instead of spinning.
+// Sleeps are at least IDLE_MIN_US (wakeups cost host CPU) and at most IDLE_MAX_US (one microframe while USB
+// audio streams); input from other threads is noticed then. Short sleeps cost less than long ones: after a long
+// one the 12 kHz panel scan and the audio blocks pile up, and catching up costs more host CPU than it saved
+// (measured with mcrt_test: 125/250 us took 23 % CPU, 250/1000 us 48 % and blocks up to 5 ms late).
+#define IDLE_PC 0x400057e6u
+#define IDLE_MIN_US 125
+#define IDLE_MAX_US 250
 
 // ---------------------------------------------------------------- small helpers
 static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
@@ -131,6 +141,7 @@ struct mcboard {
         double next, late_max;              // next log, latest block (us after it was due) this second
         uint64_t slices, late, resync, wait_irq, wait_render, wait_usb, sof_irq, dtim2;
         double usb_us;                      // host time spent on microframes
+        double idle_us;                     // host time the CPU thread slept, idle
         uint64_t blocks0, uframes0, skips0;   // totals at the last log
     } rt;
 
@@ -194,6 +205,7 @@ struct mcboard {
     // run control / outputs
     atomic_int stop;
     atomic_int running;                     // a slice is executing (watchdog kicks it)
+    int idle;                               // the slice ended at IDLE_PC
     atomic_uint last_pc, last_sr;           // CPU state after the last slice, for mcb_status: only the CPU
                                             // thread may call into Unicorn while it runs (Unicorn keeps the
                                             // thread's JIT write/execute state in shared fields; a uc_reg_read
@@ -836,6 +848,14 @@ static void on_power_off(uc_engine *uc, uint64_t addr, uint32_t size, void *user
     uc_emu_stop(uc);
 }
 
+// The OS has nothing to do until its next interrupt (see IDLE_PC): end the slice, so the CPU thread can sleep.
+static void on_idle(uc_engine *uc, uint64_t addr, uint32_t size, void *user) {
+    mcboard *b = user;
+    (void)addr; (void)size;
+    b->idle = 1;
+    uc_emu_stop(uc);
+}
+
 // MCB_RTLOG: the OS's USB interrupt (0x40004318) is taken.
 static void on_sof_irq(uc_engine *uc, uint64_t addr, uint32_t size, void *user) {
     (void)uc; (void)addr; (void)size;
@@ -1441,6 +1461,7 @@ mcboard *mcb_create(const uint8_t *os, size_t len, const char *flash_path, const
     uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_render_done, b, 0x400593e2, 0x400593e2);
     if (getenv("MCB_RTLOG")) uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_sof_irq, b, 0x40004318, 0x40004318);
     uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_power_off, b, POWER_OFF_SPIN, POWER_OFF_SPIN);
+    if (!getenv("MCB_NOIDLE")) uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_idle, b, IDLE_PC, IDLE_PC);
     if (getenv("MCB_MIDILOG")) uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_midi_byte, b, 0x400012cc, 0x400012cc);
     uc_hook_add(b->uc, &h, UC_HOOK_MEM_UNMAPPED, (void *)on_unmapped, b, 1, 0);
 
@@ -1502,17 +1523,42 @@ static int rt_on(void) { static int v = -1; if (v < 0) v = getenv("MCB_RTLOG") !
 static void rt_log(mcboard *b, double t) {
     if (rt_on() && b->rt.next)
         fprintf(stderr, "[rt] %.0f s: %llu slices, %llu blocks (%llu late, latest %.1f ms, %llu resyncs; waited irq %llu, render %llu, "
-                "usb %llu), %llu uframes (%llu stalls), %llu SOF irqs, %llu timer-2 reads; microframes took %.2f ms\n", t / 1e6,
+                "usb %llu), %llu uframes (%llu stalls), %llu SOF irqs, %llu timer-2 reads; microframes took %.2f ms; slept %.0f ms\n", t / 1e6,
                 (unsigned long long)b->rt.slices, (unsigned long long)(b->n_blocks - b->rt.blocks0),
                 (unsigned long long)b->rt.late, b->rt.late_max / 1000, (unsigned long long)b->rt.resync,
                 (unsigned long long)b->rt.wait_irq, (unsigned long long)b->rt.wait_render, (unsigned long long)b->rt.wait_usb,
                 (unsigned long long)(b->usb.n_uframes - b->rt.uframes0), (unsigned long long)(b->usb.n_skips - b->rt.skips0),
-                (unsigned long long)b->rt.sof_irq, (unsigned long long)b->rt.dtim2, b->rt.usb_us / 1000);
+                (unsigned long long)b->rt.sof_irq, (unsigned long long)b->rt.dtim2, b->rt.usb_us / 1000, b->rt.idle_us / 1000);
     double next = t + 1e6;
     uint64_t blocks = b->n_blocks, uframes = b->usb.n_uframes, skips = b->usb.n_skips;
     memset(&b->rt, 0, sizeof b->rt);
     b->rt.next = next; b->rt.blocks0 = blocks; b->rt.uframes0 = uframes; b->rt.skips0 = skips;
 }
+// Host time (us since t0) of the next event that raises an interrupt, at most `cap` after t.
+static double next_event(mcboard *b, double t, double cap) {
+    double d = t + cap;
+#define EARLIER(x) do { double x_ = (x); if (x_ && x_ < d) d = x_; } while (0)
+    for (int n = 0; n < 4; n++) { EARLIER(b->pit_due[n]); EARLIER(b->dtim_due[n]); }
+    for (int n = 0; n < 2; n++) if (b->usb.gpt_ctrl[n] & 0x80000000u) EARLIER(b->usb.gpt_due[n]);
+    if (b->dma50_enabled) EARLIER(b->dma50_due);
+    if (b->usb.cmd & 1) EARLIER(b->usb.state == USB_READY ? usb_next_uframe(b) : b->usb.due);
+    if (atomic_load(&b->min_r) != atomic_load(&b->min_w)) EARLIER(b->midi_rx_due);
+#undef EARLIER
+    return d;
+}
+// The CPU is idle with no interrupt it would take: sleep until the next event (see IDLE_PC).
+static void idle_sleep(mcboard *b, uint32_t sr) {
+    if (b->irq_level > (int)((sr >> 8) & 7) || atomic_load(&b->stop)) return;
+    double most = b->usb.cap_alt || b->usb.play_alt ? SLICE_USB_US : IDLE_MAX_US;
+    double t = now_us() - b->t0, d = next_event(b, t, most);
+    if (d < t + IDLE_MIN_US) d = t + (IDLE_MIN_US < most ? IDLE_MIN_US : most);
+    double us = d - (now_us() - b->t0);
+    if (us < 20) return;
+    struct timespec ts = { 0, (long)(us * 1000) };
+    nanosleep(&ts, NULL);
+    b->rt.idle_us += us;
+}
+
 int mcb_run(mcboard *b, double seconds) {
     double end = seconds > 0 ? now_us() + seconds * 1e6 : 0;
     if (atomic_load(&b->powered_off)) return 0;              // powered off: nothing runs any more
@@ -1537,6 +1583,7 @@ int mcb_run(mcboard *b, double seconds) {
             ret = 1;
             break;
         }
+        if (b->idle) { b->idle = 0; idle_sleep(b, sr); }
         double t = now_us() - b->t0;
         timers_service(b, t);
         dma50_check(b, t);

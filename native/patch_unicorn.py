@@ -373,3 +373,129 @@ if old in s:
             *(uint32_t *)value = cpu_m68k_get_sr(env);''')
     u.write_text(s)
 print('patched SR read')
+
+# --- fast stores to RAM that holds no code. Unicorn has no dirty bitmap: every RAM page reads as "clean", so
+#     every TLB entry for writable RAM starts with TLB_NOTDIRTY, and notdirty_write (the slow path) only clears it
+#     for pages that are not executable and have no memory hooks at all, even ones that cannot fire on RAM (our
+#     unmapped-access hook). With DDR and SRAM mapped UC_PROT_ALL, every guest store took the slow path, and it
+#     ran an SMC check for code on its page: about half the host time the OS cost. As upstream QEMU does:
+#     a write to a page without translated code makes the entry fast, and translating code on a page
+#     (tlb_protect_code) puts its write entries back on the slow path, so self-modifying code is still caught.
+tr = pathlib.Path(sys.argv[1]) / 'qemu/accel/tcg/translate-all.c'
+s = tr.read_text()
+if 'uc_ram_page_has_code' not in s:
+    s += '''
+/* Model:Cycles board: does this RAM page hold translated code? (see patch_unicorn.py) */
+bool uc_ram_page_has_code(struct uc_struct *uc, tb_page_addr_t addr)
+{
+    PageDesc *p = page_find(uc, addr >> TARGET_PAGE_BITS);
+    return p && p->first_tb;
+}
+'''
+    tr.write_text(s)
+ct = pathlib.Path(sys.argv[1]) / 'qemu/accel/tcg/cputlb.c'
+s = ct.read_text()
+if 'uc_ram_page_has_code' not in s:
+    old = '''    cpu_physical_memory_test_and_clear_dirty(ram_addr, TARGET_PAGE_SIZE,
+                                             DIRTY_MEMORY_CODE);
+}'''
+    assert old in s
+    s = s.replace(old, old[:-1] + '''    /* Model:Cycles board: writes to this page are checked for self-modifying code again. */
+    if (uc->cpu) {
+        tlb_reset_dirty(uc->cpu, (ram_addr_t)(uintptr_t)qemu_map_ram_ptr(uc, NULL, ram_addr & TARGET_PAGE_MASK),
+                        TARGET_PAGE_SIZE);
+    }
+}''', 1)
+    old = '''            !(tlbe->addr_code != -1) &&
+            !uc_mem_hook_installed(cpu->uc, tlbe->paddr | (mem_vaddr & ~TARGET_PAGE_MASK))) {'''
+    assert old in s
+    s = s.replace(old, '''            !uc_ram_page_has_code(cpu->uc, ram_addr) &&
+            !uc_rw_hook_installed(cpu->uc, tlbe->paddr | (mem_vaddr & ~TARGET_PAGE_MASK))) {''', 1)
+    old = 'static void notdirty_write(CPUState *cpu, vaddr mem_vaddr, unsigned size,'
+    s = s.replace(old, '''bool uc_ram_page_has_code(struct uc_struct *uc, tb_page_addr_t addr);
+/* Model:Cycles board: hooks that need every access to this RAM address on the slow path (unmapped and
+   protection hooks never fire on mapped RAM). */
+static bool uc_rw_hook_installed(struct uc_struct *uc, hwaddr paddr)
+{
+    return HOOK_EXISTS_BOUNDED(uc, UC_HOOK_MEM_READ, paddr) ||
+           HOOK_EXISTS_BOUNDED(uc, UC_HOOK_MEM_READ_AFTER, paddr) ||
+           HOOK_EXISTS_BOUNDED(uc, UC_HOOK_MEM_WRITE, paddr);
+}
+
+''' + old, 1)
+    ct.write_text(s)
+print('patched fast RAM stores')
+
+# --- Apple Silicon: assert_executable reads a system register behind an `isb` on every block exit, JIT write
+#     toggle and hook callback (each MMIO access), only to feed an assert(); compile it out in release builds.
+aj = pathlib.Path(sys.argv[1]) / 'qemu/include/tcg/tcg-apple-jit.h'
+s = aj.read_text()
+old = '''static inline void assert_executable(bool executable) {
+    if (!pthread_jit_write_protect_supported_np()) {'''
+if old in s:
+    s = s.replace(old, '''static inline void assert_executable(bool executable) {
+#ifdef NDEBUG   /* Model:Cycles board: release builds skip the check (see patch_unicorn.py) */
+    (void)executable;
+    return;
+#endif
+    if (!pthread_jit_write_protect_supported_np()) {''', 1)
+    aj.write_text(s)
+print('patched release assert')
+
+# --- Apple Silicon: keep the JIT executable for the whole run. Unicorn made it writable after every exit from
+#     generated code (cpu_tb_exec, the exit-request helper, cpu_loop_exit) and executable again before the next
+#     block chain: two pthread_jit_write_protect_np calls each time the CPU leaves the JIT (interrupts, IRQ
+#     kicks), the largest host cost left once the OS idles. Every write to the JIT (translation, chaining,
+#     invalidation, flush) already unlocks on its own, so make it writable once, when the run ends: callers
+#     outside the run see the same state as before.
+q = pathlib.Path(sys.argv[1]) / 'qemu'
+s = (q / 'accel/tcg/cpu-exec.c').read_text()
+old = '''    ret = tcg_qemu_tb_exec(env, tb_ptr);
+    if (cpu->uc->nested_level == 1) {
+        // Only unlock (allow writing to JIT area) if we are the outmost uc_emu_start
+        tb_exec_unlock(cpu->uc);
+    }
+'''
+if old in s:
+    s = s.replace(old, '''    ret = tcg_qemu_tb_exec(env, tb_ptr);
+    /* Model:Cycles board: the JIT stays executable until the run ends (see patch_unicorn.py). */
+''', 1)
+    (q / 'accel/tcg/cpu-exec.c').write_text(s)
+s = (q / 'accel/tcg/tcg-runtime.c').read_text()
+old = '''        // from cpu_tb_exec
+        if (uc->nested_level == 1) {
+            // Only unlock (allow writing to JIT area) if we are the outmost uc_emu_start
+            tb_exec_unlock(uc);
+        }
+'''
+if old in s:
+    s = s.replace(old, '''        /* Model:Cycles board: the JIT stays executable until the run ends (see patch_unicorn.py). */
+''', 1)
+    (q / 'accel/tcg/tcg-runtime.c').write_text(s)
+s = (q / 'accel/tcg/cpu-exec-common.c').read_text()
+old = '''    /* Unlock JIT write protect if applicable. */
+    if (cpu->uc->nested_level == 1) {
+        tb_exec_unlock(cpu->uc);
+    }
+'''
+if old in s:
+    s = s.replace(old, '''    /* Model:Cycles board: the JIT stays executable until the run ends (see patch_unicorn.py). */
+''', 1)
+    (q / 'accel/tcg/cpu-exec-common.c').write_text(s)
+s = (q / 'softmmu/cpus.c').read_text()
+old = '''        if (tcg_cpu_exec(uc)) {
+            break;
+        }
+    }
+'''
+if old in s and 'JIT writable again' not in s:
+    s = s.replace(old, old + '''    /* Model:Cycles board: the run is over: JIT writable again, as Unicorn leaves it (see patch_unicorn.py). */
+    if (uc->nested_level == 1) {
+        tb_exec_unlock(uc);
+    }
+''', 1)
+    (q / 'softmmu/cpus.c').write_text(s)
+for f, mark in (('accel/tcg/cpu-exec.c', 'stays executable'), ('accel/tcg/tcg-runtime.c', 'stays executable'),
+                ('accel/tcg/cpu-exec-common.c', 'stays executable'), ('softmmu/cpus.c', 'JIT writable again')):
+    assert mark in (q / f).read_text(), f
+print('patched JIT write toggles')

@@ -1,10 +1,11 @@
 # What's left for a full release
 
-State on 2026-10-26: the Model:Cycles OS 1.13 boots and runs in real time. The screen, keys, knobs, pads, LEDs and
+State on 2026-10-27: the Model:Cycles OS 1.13 boots and runs in real time. The screen, keys, knobs, pads, LEDs and
 audio out all work. So do MIDI over the TRS jacks and over USB (as CoreMIDI ports), USB audio both ways (routed to
 Mac audio devices), and an Arturia MiniLab 3 can play it. Quitting is a clean power-off through the OS's own power-key
 path (`mcshutdown_test` checks that the project survives it), and the app menu has Reset +Drive, Factory reset and
-Reveal Data Folder. Everything below is still open, ordered by how much it blocks a release.
+Reveal Data Folder. The CPU thread sleeps while the OS idles, so the app takes about a third of one core
+instead of all of it. Everything below is still open, ordered by how much it blocks a release.
 
 ## 1. Release blockers
 
@@ -50,7 +51,8 @@ sample for sample. What remains:
   often this happens on a busy laptop, and consider giving the CPU thread a real-time scheduling policy.
 - **Fixed USB slice.** While USB audio streams, the CPU runs in 125 µs slices (one microframe) instead of 1 ms:
   about 6200 slices/s instead of 800, and the microframes take about 3–8 ms of host time per second (M4 Pro,
-  `MCB_RTLOG=1`). The process uses ~118 % CPU either way. With nothing routed, microframes take ~0.15 ms/s.
+  `MCB_RTLOG=1`). With nothing routed, microframes take ~0.15 ms/s. Since the idle sleep, streaming costs
+  about the same CPU as not streaming (`mcrt_test`: 26 % against 23 %).
 - **Two engines on one device.** Routing *Model:Cycles to* the same device as the main output (MacBook Pro
   Speakers, say) plays the mix twice, a few ms apart: it sounds louder and comb-filtered. Nothing breaks (both
   queues keep their cushion), but the menu could warn about it, or leave out the main output's device.
@@ -74,12 +76,18 @@ sample for sample. What remains:
 - **Latency.** Measure end to end (pad click → sound) and document it. Trim the cushion if the clock work allows.
 
 ### CPU and power
-- **The emulator keeps one core busy (~97 %) even when nothing plays**, measured on an M4 Pro. The idle loop at
-  `0x400057e6` could be detected and the CPU thread put to sleep until the next timer or interrupt. That matters for
-  laptops (battery, heat, fans).
-- **App Nap.** Opt out with `ProcessInfo.beginActivity(.userInitiated, .latencyCritical)` while running, or audio
-  and timers drift when the window is hidden.
-- **Hiding the window.** Test audio and MIDI timing with the window minimised and in the background.
+Done: the CPU thread sleeps while the OS idles in its background loop (`IDLE_PC`, 125–250 µs at a time). Two
+Unicorn patches cut what the OS costs to run: RAM stores without code on their page take the fast path again, and
+the JIT stays executable for a whole run. The app opts out of App Nap (`beginActivity`, idle system sleep still
+allowed). On an M4 Pro: the board alone goes from 100 % to about 22 % of a core idle and 23 % playing
+(`mcrt_test`, no block more than 1.6 ms late). The whole app goes from ~97 % to about 33 % idle, the same with the
+window hidden, with no underruns. What remains:
+- **Battery.** Measure power on battery (`powermetrics`) and fan noise in a long session; the 12 kHz panel scan
+  and 1500 audio blocks a second still wake the CPU thread several thousand times a second.
+- **Less work per interrupt.** Each interrupt costs a TB-state restore (`cpu_restore_state`, ~7 % of the CPU
+  thread's time) and the vector fetch goes through the slow load path. Unicorn changes, if more is needed.
+- **Hidden-window MIDI timing.** Audio was checked with the app launched hidden (no underruns); MIDI clock
+  timing with the window hidden still needs a test with real gear.
 
 ### MIDI
 - **Sending timing.** Outgoing MIDI is collected every 1 ms and sent "now". Timestamp bytes with the time they left
