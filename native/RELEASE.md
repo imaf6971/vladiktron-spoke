@@ -4,7 +4,8 @@ State on 2026-10-27: the Model:Cycles OS 1.13 boots and runs in real time. The s
 audio out all work. So do MIDI over the TRS jacks and over USB (as CoreMIDI ports), USB audio both ways (routed to
 Mac audio devices), and an Arturia MiniLab 3 can play it. Quitting is a clean power-off through the OS's own power-key
 path (`mcshutdown_test` checks that the project survives it), and the app menu has Reset +Drive, Factory reset and
-Reveal Data Folder. The CPU thread sleeps while the OS idles, so the app takes about a third of one core
+Reveal Data Folder. On first run the app installs the OS from the user's own `.syx` or Elektron's `.zip`
+(`mcfirmware.c`), checking it is the original 1.13. The CPU thread sleeps while the OS idles, so the app takes about a third of one core
 instead of all of it. Everything below is still open, ordered by how much it blocks a release.
 
 ## 1. Release blockers
@@ -13,27 +14,36 @@ instead of all of it. Everything below is still open, ordered by how much it blo
 - **Unicorn is GPL-2.0, and it is linked statically.** Shipping the app means shipping it under GPL-2.0-compatible
   terms, with source (including `patch_unicorn.py`'s changes). The licence needs to be chosen and written down
   (`LICENSE`, about box, third-party notices).
-- **The firmware decoding comes from Modded-Cycles (GPL-3.0).** Today it only runs at build time (`extract_os.py`).
-  If it moves into the app (see onboarding below), it becomes GPL-3.0, or has to be rewritten from the format
-  specification.
+- **Code from Modded-Cycles is MIT, not GPL-3.0** (checked at the pinned revision 2594419: the repository's
+  `LICENSE`, and `tools/mtlib/` with its own MIT texts from drumkilla and Marcel Bierling; only one Python check
+  script there is GPL-3.0, and nothing here uses it). `mcfirmware.c` is a port of `mtlib` and is now in the app;
+  `mcengine.c` and the EMAC model in `patch_unicorn.py` follow Modded-Cycles too. The about box / third-party notices
+  must carry those MIT notices (Modded-Cycles contributors, drumkilla, Marcel Bierling).
 - **Elektron's firmware stays the user's.** The app must never bundle or download it. This is already true; keep it
   true in the onboarding flow.
 - **Names and look.** "Model:Cycles", "Elektron" and a faithful copy of the panel are their trademarks and trade dress.
   This needs a decision (legal advice, or asking Elektron) before anything is published. The app name, window title
   and panel artwork may have to change.
 
-### Onboarding without a developer toolchain
-- Today `build.sh` needs git, Python, CMake, Ninja and Xcode, and it clones Unicorn and Modded-Cycles. A user needs
-  instead: open the app → "Choose your `model-cycles_OS1.13.syx`" → the app decodes it (SysEx container, aPLib)
-  and installs `main_os.bin` and `flash.bin` itself. That means porting the decoder to C or Swift (see licensing).
-- Check the file is OS 1.13, by its version string and SHA-256 of the sections. Refuse anything else with a clear
-  message: every address in `mcboard.c` is specific to 1.13.
+### Onboarding
+Done: with no OS in its data folder the app shows a first-run screen (choose or drop the `.syx`, or Elektron's
+`.zip`, with a link to Elektron's support page). `mcfirmware.c` decodes it in about 10 ms and checks the version
+string and the SHA-256 of the container and of the decoded MAIN OS; it rejects other versions, modified 1.13s,
+the Model:Samples OS, damaged or truncated files and non-Elektron files, each with its own message. The output is
+byte-identical to the old Python extraction. `build.sh` uses the same code (`mcinstall`), so it no longer needs
+Python or the Modded-Cycles clone for the firmware. What remains:
+- **A sandboxed build** (if the app goes to the Mac App Store) would need the Open panel's security-scoped URL
+  and no `ditto` subprocess for the `.zip`.
+- **First-run copy** names Elektron and links its site; it is part of the names-and-look decision above.
+- The first-run screen has been checked in a snapshot and the install by a scripted run (`MODELMAC_INSTALL`); the
+  Open panel and drag and drop have not been clicked through.
 
 ### Signing and distribution
 - Proper bundle ID, Developer ID signing, hardened runtime and notarisation. Unicorn's JIT needs
   `com.apple.security.cs.allow-jit` (and `MAP_JIT` on Apple Silicon). Verify it still runs once signed.
 - Build with an Xcode project or a Swift package instead of `swiftc` in a shell script, with Unicorn and its patches
-  pinned and vendored rather than cloned at build time.
+  pinned and vendored rather than cloned at build time (`build.sh` still needs git, Python, CMake and Ninja for
+  Unicorn).
 - Decide on architectures: currently tested only on Apple Silicon (M4 Pro), macOS 14+. Intel needs a test, or an
   explicit "Apple Silicon only".
 
@@ -115,8 +125,8 @@ window hidden, with no underruns. What remains:
 
 ### App and UI
 - **Settings window:** audio device, MIDI port names, controller mapping, USB connected / unplugged.
-- **Menus:** Reset (a power cycle), About (licences), Help (keyboard, mouse and MiniLab controls). Reset +Drive,
-  Factory reset and Reveal Data Folder are done; their dialogs have not been clicked through in a scripted test yet.
+- **Menus:** Reset (a power cycle), About (licences), Help (keyboard, mouse and MiniLab controls). Install OS…,
+  Reset +Drive, Factory reset and Reveal Data Folder are done; their dialogs have not been clicked through in a scripted test yet.
 - **Quitting takes about 2 s** (the OS needs the power key held for 13 polls before it shuts down). It could be shorter
   by setting the OS's own "power off now" flag (0x40a74560, set at 0x4005398c and checked at 0x400538f4), which
   skips the wait. That would mean writing OS memory instead of pressing a key.

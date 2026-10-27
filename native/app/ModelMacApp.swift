@@ -1,6 +1,6 @@
 // Model Mac: Elektron's Model:Cycles OS 1.13 on the virtual board, with a front panel like the hardware.
-// Firmware and storage live in ~/Library/Application Support/ModelMac (installed by native/build.sh from
-// the user's own .syx); nothing from the firmware is part of this app.
+// Firmware and storage live in ~/Library/Application Support/ModelMac, installed from the user's own .syx on first
+// run (FirmwareSetup.swift); nothing from the firmware is part of this app.
 import AppKit
 import SwiftUI
 
@@ -17,6 +17,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             w.setContentSize(NSSize(width: 1100, height: 1100 * Panel.size.height / Panel.size.width))
         }
         if ProcessInfo.processInfo.environment["MODELMAC_DEMO"] != nil { demo() }
+        // Self-check of the first-run install: MODELMAC_INSTALL=/path/to.syx (or .zip) installs it after 3 s.
+        if let file = ProcessInfo.processInfo.environment["MODELMAC_INSTALL"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [board] in
+                board.installFirmware(from: URL(fileURLWithPath: file)) { NSLog("Model Mac test: install: %@", $0 ?? "ok") }
+            }
+        }
     }
 
     /// Self-check: once the OS has drawn its screen for a few seconds, drives the panel like a user would
@@ -51,6 +57,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.activateFileViewerSelecting([Board.dataDir])
     }
 
+    /// Installs the OS again from the .syx (or Elektron's .zip), for a data folder that lost its files.
+    @objc func installFirmware() {
+        guard let url = FirmwareFile.choose() else { return }
+        board.installFirmware(from: url) { [weak self] problem in
+            if let problem {
+                self?.report(NSError(domain: "ModelMac", code: 2, userInfo: [NSLocalizedDescriptionKey: problem]))
+            }
+        }
+    }
+
     @objc func resetDrive() {
         guard confirm("Reset the +Drive?",
                       detail: "The Model:Cycles shuts down and starts again with an empty +Drive, which the OS then " +
@@ -64,7 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard FileManager.default.fileExists(atPath: Board.factoryFlash.path) else {
             report(NSError(domain: "ModelMac", code: 1, userInfo: [NSLocalizedDescriptionKey:
                 "There is no factory flash image (flash.factory.bin) in \(Board.dataDir.path). " +
-                "Run native/build.sh again to install it."]))
+                "Choose Install OS… in the Model:Cycles menu to install it again."]))
             return
         }
         guard confirm("Factory reset?",
@@ -106,6 +122,7 @@ struct ModelMacApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandMenu("Model:Cycles") {
+                Button("Install OS…") { delegate.installFirmware() }
                 Button("Reveal Data Folder") { delegate.revealDataFolder() }
                 Divider()
                 Button("Reset +Drive…") { delegate.resetDrive() }

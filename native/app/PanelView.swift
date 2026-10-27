@@ -94,6 +94,7 @@ struct PanelView: View {
         }
         .background(Color(red: 0.600, green: 0.604, blue: 0.588))
         .background(KeyboardMonitor(board: board, hoveredKnob: $hoveredKnob))
+        .overlay { if board.needsFirmware { FirmwareSetupView(board: board) } }
     }
 
     private var panel: some View {
@@ -116,7 +117,7 @@ struct PanelView: View {
             group(knobs)
             group(rightColumn)
             group(padsAndSteps)
-            connections.position(x: 500, y: 651)
+            if !board.needsFirmware { connections.position(x: 500, y: 651) }
         }
         .frame(width: 1000, height: 668, alignment: .topLeading)
     }

@@ -8,6 +8,12 @@ Runs Elektron's own Model:Cycles OS 1.13 on a virtual board. The firmware comes 
 open "build/Model Mac.app"
 ```
 
+Without the `.syx` (or on a Mac where it was never installed), the app asks for it on first run: choose
+`model-cycles_OS1.13.zip` as downloaded from [Elektron's support page](https://www.elektron.se/support-downloads/modelcycles#resources),
+or the `.syx` inside it, or drop either on the window. Only Elektron's original OS 1.13 is accepted (version and
+SHA-256 checked; other versions, modified OSes, the Model:Samples OS and damaged files each get their own message).
+**Model:Cycles → Install OS…** does the same later, for example to restore `flash.factory.bin`.
+
 Data lives in `~/Library/Application Support/ModelMac/` (menu **Model:Cycles → Reveal Data Folder**): `main_os.bin`
 (decoded OS), `flash.bin` (boot flash, holds settings), `flash.factory.bin` (the untouched flash image, for Factory
 reset), `emmc.img` + `.extcsd` (the +Drive). `MODELMAC_DATA=/some/folder` points the app at another folder.
@@ -34,7 +40,7 @@ first, and shut the OS down cleanly before they change any files.
 | `mcshutdown_test` | Headless check (PASS/FAIL): `./mcshutdown_test build/main_os.bin build/flash.bin`. On a fresh +Drive in a temporary folder, it changes the project, powers off with the power key, boots again and checks that the change survived, with no eMMC errors. A control run shows that a hard stop loses the change. |
 | `mcengine.c`, `mcbench` | The six-voice synth engine alone (bit-exact with Modded-Cycles' Python model) |
 | `patch_unicorn.py` | Unicorn 2.1.4 fixes for ColdFire: EMAC maths, QEMU's own exceptions, IRQ lines, safe stops, an SR read that no longer changes the condition codes; speed: fast stores to RAM pages that hold no code, the JIT left executable for a whole run, no per-exit `isb`+register read in release builds |
-| `extract_os.py` | Decodes the `.syx` with Modded-Cycles' `mtlib` |
+| `mcfirmware.c/.h`, `mcinstall` | Decodes the `.syx` (SysEx packets and checksums, ELE3 container, aPLib-variant MAIN OS) and checks it is OS 1.13; a C port of `mtlib` (Modded-Cycles, MIT), used by the app and by `./mcinstall <syx> <dir>` |
 
 ## Playing it
 

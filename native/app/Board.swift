@@ -7,6 +7,7 @@ final class Board: ObservableObject, @unchecked Sendable {
     @Published var leds: UInt64 = 0
     @Published var status = "Starting…"
     @Published var error: String?
+    @Published var needsFirmware = false                // no OS installed yet: the panel asks for the .syx
     @Published var usbState: Int32 = 0                  // mcb_usb_state
     @Published var controller: String?                  // connected MIDI controller (MiniLab 3)
 
@@ -29,7 +30,10 @@ final class Board: ObservableObject, @unchecked Sendable {
         let flash = Board.dataDir.appendingPathComponent("flash.bin")
         let emmc = Board.dataDir.appendingPathComponent("emmc.img")
         guard let data = try? Data(contentsOf: os), FileManager.default.fileExists(atPath: flash.path) else {
-            error = "Firmware not found in \(Board.dataDir.path).\nRun native/build.sh with your model-cycles_OS1.13.syx first."
+            needsFirmware = true                            // the panel shows the first-run screen
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                if self?.needsFirmware == true { self?.snapshotNow() }
+            }
             return
         }
         var err = [CChar](repeating: 0, count: 256)
@@ -148,7 +152,55 @@ final class Board: ObservableObject, @unchecked Sendable {
 
     static var factoryFlash: URL { dataDir.appendingPathComponent("flash.factory.bin") }
 
-    /// Factory reset: a fresh +Drive, and flash.bin (settings) back to the image build.sh installed
+    /// Installs the OS from the user's own .syx (mcfirmware.h): main_os.bin, flash.factory.bin, and flash.bin if
+    /// there is none. Only Elektron's OS 1.13 passes; `done` gets the reason a file didn't (on the main thread).
+    /// A running board needs no restart: it has its OS in memory, and flash.bin is never replaced.
+    /// Elektron's download is a .zip with the .syx inside; either one will do.
+    func installFirmware(from file: URL, done: @escaping (String?) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            var err = [CChar](repeating: 0, count: 256)
+            var rc: Int32 = -1
+            var unzipped: URL?
+            if file.pathExtension.lowercased() == "zip" {
+                unzipped = Board.unzip(file)
+                if let syx = unzipped.flatMap(Board.findSyx) {
+                    rc = mcf_install(syx.path, Board.dataDir.path, &err, err.count)
+                } else {
+                    strlcpy(&err, "There is no .syx file in this .zip.", err.count)
+                }
+            } else {
+                rc = mcf_install(file.path, Board.dataDir.path, &err, err.count)
+            }
+            if let unzipped { try? FileManager.default.removeItem(at: unzipped) }
+            DispatchQueue.main.async { [self] in
+                guard rc == 0 else { done(String(cString: err)); return }
+                if board == nil {
+                    needsFirmware = false
+                    error = nil
+                    start()
+                }
+                done(nil)
+            }
+        }
+    }
+
+    /// Unpacks a .zip into a new temporary folder (nil if ditto fails).
+    private static func unzip(_ zip: URL) -> URL? {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ModelMac-" + UUID().uuidString)
+        let ditto = Process()
+        ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        ditto.arguments = ["-x", "-k", zip.path, dir.path]
+        guard (try? ditto.run()) != nil else { return nil }
+        ditto.waitUntilExit()
+        return ditto.terminationStatus == 0 ? dir : nil
+    }
+
+    private static func findSyx(in dir: URL) -> URL? {
+        let all = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
+        return all.first { $0.pathExtension.lowercased() == "syx" && !$0.path.contains("__MACOSX") }
+    }
+
+    /// Factory reset: a fresh +Drive, and flash.bin (settings) back to the image installed from the .syx
     /// (check `factoryFlash` exists first).
     func factoryReset(done: @escaping (Error?) -> Void) {
         restart(changing: { dir in
