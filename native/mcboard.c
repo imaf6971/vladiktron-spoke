@@ -910,12 +910,14 @@ static void on_midi_byte(uc_engine *uc, uint64_t addr, uint32_t size, void *user
     fprintf(stderr, "[midi in] %02x\n", v[3]);
 }
 
-static void on_unmapped(uc_engine *uc, uc_mem_type type, uint64_t addr, int size, int64_t value, void *user) {
+// (An UC_HOOK_MEM_UNMAPPED callback returns whether it handled the access; false: the CPU stops with the error.)
+static bool on_unmapped(uc_engine *uc, uc_mem_type type, uint64_t addr, int size, int64_t value, void *user) {
     mcboard *b = user;
     uint32_t pc;
     (void)type; (void)size; (void)value;
     uc_reg_read(uc, UC_M68K_REG_PC, &pc);
     snprintf(b->fault, sizeof b->fault, "unmapped access 0x%08llx at pc 0x%08x", (unsigned long long)addr, pc);
+    return false;
 }
 
 // ---------------------------------------------------------------- eDMA engine (software-started transfers)
@@ -1369,8 +1371,10 @@ static void usb_microframe(mcboard *b) {
         b->usb.play_acc += b->usb.fb > 0 ? b->usb.fb : 6.0;
         int frames = (int)b->usb.play_acc;
         int cap = (int)((gread32(b, d + 4) >> 16) & 0x7FFF) / 8;
+        if (cap > (int)sizeof buf / 8) cap = (int)sizeof buf / 8;   // (the OS's dTDs hold one microframe, ~6 frames)
         if (frames > cap) frames = cap;
         b->usb.play_acc -= frames;
+        if (b->usb.play_acc > 8) b->usb.play_acc = 8;        // frames the OS had no room for are not owed forever
         uint64_t r = atomic_load(&b->usb.play_r), w = atomic_load(&b->usb.play_w);
         for (int i = 0; i < frames; i++) {
             float v[2] = {0, 0};

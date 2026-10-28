@@ -25,16 +25,18 @@ static void write_file(const char *name, size_t size) {
     free(z);
 }
 
-// mcb_create with a flash image of `size` bytes; returns the board (or NULL) and its error text.
-static mcboard *create(size_t size, char *err, size_t errlen) {
-    static const uint8_t os[16] = {0};
+// mcb_create with a flash image of `size` bytes and `os` (zeros if NULL); returns the board (or NULL) and its error.
+static mcboard *create_os(const uint8_t *os, size_t len, size_t size, char *err, size_t errlen) {
+    static const uint8_t zeros[16] = {0};
+    if (!os) { os = zeros; len = sizeof zeros; }
     char flash[600], emmc[600];
     write_file("flash.bin", size);
     path(flash, sizeof flash, "flash.bin");
     path(emmc, sizeof emmc, "emmc.img");
     err[0] = 0;
-    return mcb_create(os, sizeof os, flash, emmc, err, errlen);
+    return mcb_create(os, len, flash, emmc, err, errlen);
 }
+static mcboard *create(size_t size, char *err, size_t errlen) { return create_os(NULL, 0, size, err, errlen); }
 
 static void test_flash_size(void) {
     char err[256];
@@ -109,11 +111,49 @@ static void test_usb_midi_parser(void) {
     free(b);
 }
 
+// An access to unmapped memory stops the CPU as an unmapped read (the hook answers "not handled"), with the fault.
+static void test_unmapped_access(void) {
+    uint8_t os[0x100] = {0};
+    static const uint8_t code[] = {0x20, 0x39, 0x20, 0x00, 0x00, 0x00};   // move.l (0x20000000).l,d0
+    memcpy(os + (OS_ENTRY - OS_BASE), code, sizeof code);
+    char err[256];
+    mcboard *b = create_os(os, sizeof os, MCB_FLASH_SIZE, err, sizeof err);
+    if (!b) { check(0, err); return; }
+    uc_err r = uc_emu_start(b->uc, OS_ENTRY, 0xFFFFFFFFull, 0, 4);
+    check(r == UC_ERR_READ_UNMAPPED, "an unmapped read stops the CPU with UC_ERR_READ_UNMAPPED");
+    check(strstr(b->fault, "unmapped access 0x20000000") != NULL, "... and the fault names the address");
+    mcb_destroy(b);
+}
+
+// A playback microframe never writes more than its packet buffer holds, whatever the OS's dTD and the backlog.
+static void test_usb_play_packet_bound(void) {
+    char err[256];
+    mcboard *b = create(MCB_FLASH_SIZE, err, sizeof err);
+    if (!b) { check(0, err); return; }
+    uint32_t eplist = 0x80000000u, dtd = 0x40100000u, data = 0x40200000u;
+    b->usb.eplist = eplist;
+    b->usb.play_ep = 1;
+    b->usb.play_on = b->usb.play_alt = 1;
+    b->usb.fb = 6.0;
+    b->usb.play_acc = 1000;                                   // a backlog of frames owed
+    gwrite32(b, dtd, 1);                                      // next: none
+    gwrite32(b, dtd + 4, 0x7FFFu << 16 | 0x80);               // 32 KB buffer, active
+    for (uint32_t i = 0; i < 5; i++) gwrite32(b, dtd + 8 + 4 * i, data + 0x1000 * i);
+    b->usb.cur[2] = dtd;                                      // endpoint 1 OUT
+    usb_microframe(b);
+    check(b->usb.n_play > 0 && b->usb.n_play <= 128, "a playback packet holds at most 128 frames (1 KB)");
+    check(b->usb.play_acc < 16, "... and the backlog does not keep growing");
+    mcb_destroy(b);
+}
+
 int main(void) {
+    setvbuf(stdout, NULL, _IOLBF, 0);                        // what passed shows even if a check crashes
     snprintf(dir, sizeof dir, "%s/mcunit.XXXXXX", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
     if (!mkdtemp(dir)) { perror("mkdtemp"); return 2; }
     test_flash_size();
     test_usb_midi_parser();
+    test_unmapped_access();
+    test_usb_play_packet_bound();
     char p[600];
     static const char *names[] = {"flash.bin", "emmc.img", "emmc.img.extcsd"};
     for (int i = 0; i < 3; i++) { path(p, sizeof p, names[i]); unlink(p); }
