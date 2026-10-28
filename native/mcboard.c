@@ -1781,7 +1781,8 @@ void mcb_usb_midi_in(mcboard *b, const uint8_t *data, size_t n) {
         if (b->usb.in_sysex) {
             if (c == 0xF7 || c >= 0x80) {                     // end (a status byte also ends it)
                 if (c == 0xF7) b->usb.sx[b->usb.sx_n++] = c;
-                usb_event(b, (uint8_t)(4 + b->usb.sx_n), b->usb.sx[0], b->usb.sx_n > 1 ? b->usb.sx[1] : 0, b->usb.sx_n > 2 ? b->usb.sx[2] : 0);
+                if (b->usb.sx_n)                              // (cut off right after a full packet: nothing left)
+                    usb_event(b, (uint8_t)(4 + b->usb.sx_n), b->usb.sx[0], b->usb.sx_n > 1 ? b->usb.sx[1] : 0, b->usb.sx_n > 2 ? b->usb.sx[2] : 0);
                 b->usb.in_sysex = 0;
                 if (c == 0xF7) continue;
             } else {
