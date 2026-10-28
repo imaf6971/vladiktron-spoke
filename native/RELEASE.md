@@ -132,14 +132,10 @@ window hidden, with no underruns. What remains:
   program change, CC/NRPN, track channels, auto channel.
 
 ### MiniLab 3
-- **Real-hardware testing.** The mapping was checked with a simulated MiniLab ("Minilab3 MIDI" source, factory
-  values). It has not run against the real controller: confirm its port names, the pad channel, the pad pressure
-  message type (poly vs channel), and the CC numbers.
-- **The main encoder** (and its click) is not mapped. Find what it sends and map it to LEVEL/DATA.
-- **Feedback to the controller.** The MiniLab's pad colours could follow the Model:Cycles' pad LEDs, and its screen
-  could show the parameter name. Both are done over SysEx, using Arturia's protocol.
-- **Endless knobs.** The MiniLab sends absolute values, so when its value is at 0 or 127 it can't move further.
-  Either switch it to relative mode with SysEx or MIDI Control Center and decode that, or add pickup/soft takeover.
+- **DAW mode** (app/MiniLab.swift) was tested on a real MiniLab 3: display, pad colours, endless knobs, main encoder.
+  Still to check on the hardware: every pad and PANEL key against the panel, pad pressure in DAW mode (none seen
+  yet), and the colours for every LED state. Arturia mode was only checked with a simulated source.
+- **Octave.** PANEL keys assume octave 0 (lowest key note 48); the MiniLab does not report Oct − / +.
 - **Other controllers.** A small Settings screen to choose the controller and learn CCs, so it isn't hard-coded.
 
 ### App and UI

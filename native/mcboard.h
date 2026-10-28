@@ -46,6 +46,9 @@ uint64_t mcb_screen(mcboard *b, uint8_t out[1024]);
 // a step is one detent (a full quadrature cycle, two OS knob events). Pads 1..6 are T1..T6, pressure 0..1.
 void mcb_key(mcboard *b, int index, int down);
 void mcb_encoder(mcboard *b, int number, int steps);
+// The same in OS knob events (half a detent each). The OS ignores the first event after a pause of about 200 ms and
+// counts one value per event after that; two events 40 ms apart make one clean click.
+void mcb_encoder_events(mcboard *b, int number, int events);
 void mcb_pad(mcboard *b, int pad, float pressure);
 
 // LEDs: bit n set = LED bit n lit (the OS's 7 latch bytes, 56 bits). Thread-safe snapshot.

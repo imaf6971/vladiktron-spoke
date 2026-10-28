@@ -106,6 +106,7 @@ struct mcboard {
     atomic_int enc_pending[16];             // knob turns still to deliver, in quadrature transitions (raw index)
     uint8_t enc_state[16];                  // current 2-bit Gray state per raw encoder
     uint8_t enc_shown[4];                   // encoder byte last presented per column 4..7
+    uint8_t enc_wait[16];                   // column reads left before the encoder's next transition
     atomic_int pad_level[7];                // pad pressure as ADC value, by pad 1..6
     int fp_col;
     uint64_t n_fp_reads, n_irq_taken;
@@ -801,7 +802,10 @@ static void mmio_write(uc_engine *uc, uint64_t off, unsigned size, uint64_t valu
 // column's keys back from 0x8C000002, and drives LED latches through 0x8C000000/06/0A.
 // Columns 0..3: 31 keys (bit = 1 while pressed). Columns 4..7: four encoders each, bits (2j, 2j+1) a
 // quadrature pair decoded by 0x40059c18/0x40059c74: forward is Gray state (a<<1|b) 0 -> 1 -> 3 -> 2 -> 0, and
-// the OS counts one knob event per two transitions. We move each encoder one transition per scan.
+// the OS counts one knob event per two transitions. We move each encoder at most one transition per ENC_GAP + 1
+// reads of its column (each column is read at 1.5 kHz, so about every 3 ms, a fast hand). Back to back, fast turns
+// came out uneven (two bursts of +20 events moved PITCH +9.6 and +6.7; with the gap, +8.8 and +8.0, -8.4 and -8.6).
+#define ENC_GAP 4
 static const uint8_t gray_next[4] = {1, 3, 0, 2}, gray_prev[4] = {2, 0, 3, 1};
 static uint64_t fp_read(uc_engine *uc, uint64_t off, unsigned size, void *user) {
     mcboard *b = user;
@@ -816,7 +820,10 @@ static uint64_t fp_read(uc_engine *uc, uint64_t off, unsigned size, void *user) 
     uint8_t v = 0;
     for (int j = 0; j < 4; j++) {
         int e = (col - 4) * 4 + j;
-        int p = consumed ? atomic_load(&b->enc_pending[e]) : 0;
+        int ready = consumed && !b->enc_wait[e];
+        if (b->enc_wait[e]) b->enc_wait[e]--;
+        int p = ready ? atomic_load(&b->enc_pending[e]) : 0;
+        if (p) b->enc_wait[e] = ENC_GAP;
         if (p > 0) { b->enc_state[e] = gray_next[b->enc_state[e]]; atomic_fetch_sub(&b->enc_pending[e], 1); }
         else if (p < 0) { b->enc_state[e] = gray_prev[b->enc_state[e]]; atomic_fetch_add(&b->enc_pending[e], 1); }
         uint8_t st = b->enc_state[e];
@@ -1653,6 +1660,11 @@ void mcb_key(mcboard *b, int index, int down) {
 void mcb_encoder(mcboard *b, int number, int steps) {
     if (number < 1 || number > 16) return;
     atomic_fetch_add(&b->enc_pending[enc_raw[number]], 4 * steps);     // one detent = a full Gray cycle
+}
+
+void mcb_encoder_events(mcboard *b, int number, int events) {
+    if (number < 1 || number > 16) return;
+    atomic_fetch_add(&b->enc_pending[enc_raw[number]], 2 * events);    // one OS knob event = half a Gray cycle
 }
 
 void mcb_pad(mcboard *b, int pad, float pressure) {

@@ -79,7 +79,9 @@ final class Board: ObservableObject, @unchecked Sendable {
         usbAudio.start(board: b)
         let panel = MiniLab.Panel(key: { mcb_key(b, Int32($0), $1 ? 1 : 0) },
                                   turn: { mcb_encoder(b, Int32($0), Int32($1)) },
-                                  pad: { mcb_pad(b, Int32($0), $1) })
+                                  nudge: { mcb_encoder_events(b, Int32($0), Int32($1)) },
+                                  pad: { mcb_pad(b, Int32($0), $1) },
+                                  leds: { mcb_leds(b) })
         midi.start(board: b, panel: panel) { [weak self] name in DispatchQueue.main.async { self?.controller = name } }
         let t2 = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.refresh() }
         RunLoop.main.add(t2, forMode: .common)              // also while quitting waits (modal run loop mode)

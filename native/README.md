@@ -72,20 +72,30 @@ first, and shut the OS down cleanly before they change any files.
   loopback device such as BlackHole a DAW can record the Model:Cycles or play into it. Each stream runs only while
   routed; the emulator then works in 125 µs steps, one USB microframe. With nothing routed, USB audio costs the
   emulator about 0.15 ms of host time per second; the main output comes first either way.
-- **Arturia MiniLab 3** (factory settings), picked up automatically when connected:
+- **Arturia MiniLab 3**, picked up automatically when connected. Put it in **DAW mode** (Shift + Prog) and it
+  becomes the Model:Cycles' whole front panel, with pad colours following the Model:Cycles' LEDs and names on its
+  display:
 
-  | MiniLab 3 | Model:Cycles |
+  | MiniLab 3 (DAW mode) | Model:Cycles |
   |---|---|
-  | keys, pitch and mod strips | play the active track (auto channel) |
-  | pads A1–A6 | the six pads, with velocity and pressure |
-  | pads A7 / A8 | PLAY / STOP |
-  | pads B1–B6 | select track 1–6 |
-  | pads B7 / B8 | RECORD / TAP TEMPO |
-  | knobs 1–8 | PITCH, DECAY, COLOR, SHAPE, SWEEP, CONTOUR, DELAY SEND, REVERB SEND |
+  | Shift | FUNC, held while Shift is held |
+  | main encoder, its press | LEVEL/DATA, LEVEL/DATA press |
+  | Shift + main encoder press | keys: NOTES (play the active track) ⇄ PANEL |
+  | knobs 1–8 (endless) | PITCH, DECAY, COLOR, SHAPE, SWEEP, CONTOUR, DELAY SEND, REVERB SEND |
   | faders 1–4 | LFO SPEED, VOLUME + DIST, SWING, CHANCE |
+  | pads A1–A6, A7, A8 | the six pads (velocity), PLAY, STOP |
+  | pads B1–B8 | RECORD, PATTERN, TRACK, PAGE, RETRIG, LFO SETUP, PAD MENU, PRESET MENU |
+  | PANEL keys (octave 0) | lowest 16 keys = trigs 1–16; then QUANTIZE, CLICK, TEMPO, TEMP SAVE, FUNC, PLAY, STOP, RECORD, TRACK |
+  | pitch and mod strips | pitch bend and CC 1 on the auto channel |
 
-  Knobs and faders send absolute values; each step becomes one detent. Other MiniLab programs (or controllers)
-  need their CC numbers in `MiniLab.swift`.
+  Shift + pads 1–3 stay the MiniLab's own (pad bank, program), so FUNC + those pads goes through the FUNC key of
+  the PANEL layer. Each value a knob or fader moves is one value step on the Model:Cycles; turned fast, the
+  Model:Cycles speeds up as with its own knobs.
+
+  In its Arturia mode, with factory settings, the MiniLab plays the Model:Cycles with a smaller mapping: keys and
+  strips play the active track, pads A1–A6 are the pads, A7 / A8 PLAY / STOP, B1–B6 select track 1–6, B7 / B8
+  RECORD / TAP TEMPO, knobs 1–8 and faders 1–4 as above (absolute: they stop at 0 and 127). Other MiniLab
+  programs (or controllers) need their CC numbers in `MiniLab.swift`.
 
 ## Licence
 
