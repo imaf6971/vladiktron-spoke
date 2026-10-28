@@ -90,7 +90,7 @@ final class Board: ObservableObject, @unchecked Sendable {
 
     // Self-check: SPOKE_TEST="8:play,20:out=BuiltInSpeakerDevice,30:out=,60:quit" runs these steps at the
     // given seconds after launch: press PLAY, route USB audio out/in to a device UID (empty: nowhere), open the
-    // About panel ("about"), quit.
+    // About panel ("about"), Reset +Drive without asking ("reset": use it with SPOKE_DATA), quit.
     private func runTestScript() {
         guard let script = ProcessInfo.processInfo.environment["SPOKE_TEST"] else { return }
         for step in script.split(separator: ",") {
@@ -106,6 +106,7 @@ final class Board: ObservableObject, @unchecked Sendable {
                 case "out": self.usbAudio.outputUID = arg
                 case "in": self.usbAudio.inputUID = arg
                 case "about": AppDelegate.showAbout()
+                case "reset": self.resetDrive { NSLog("Spoke test: reset: %@", $0.map { "\($0)" } ?? "ok") }
                 case "quit": RunLoop.main.perform { NSApp.terminate(nil) }   // not inside this main-queue
                                                                              // block: the shutdown replies on it
                 default: break
@@ -116,20 +117,30 @@ final class Board: ObservableObject, @unchecked Sendable {
 
     var running: Bool { board != nil }
     private var shuttingDown = false
+    private var afterShutdown: [() -> Void] = []        // `done` of every shutDown asked for while one runs
+    /// The app is quitting: a restart under way leaves the board off (its change is still made).
+    var quitting = false
 
     /// Clean shutdown, as on the hardware: holds the power key until the OS has saved its working state to the
     /// +Drive and powered off (about 2 s; the screen shows "Shutting down..."), then closes the images.
     /// After `timeout` seconds the CPU is stopped wherever it is. Calls `done` on the main thread.
     func shutDown(timeout: TimeInterval = 5, done: @escaping () -> Void) {
         guard let b = board, let t = thread else { done(); return }
-        guard !shuttingDown else { return }                 // one at a time (quit during a reset, say)
-        shuttingDown = true
+        afterShutdown.append(done)
+        guard !shuttingDown else { return }                 // one at a time (quit during a reset, say): this
+        shuttingDown = true                                 // `done` runs when the one under way ends
         mcb_power_key(b, 1)
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             let end = Date().addingTimeInterval(timeout)
             while !t.isFinished && Date() < end { usleep(5000) }
             if mcb_powered_off(b) == 0 { NSLog("Spoke: the OS did not power off within %.0f s; stopping it", timeout) }
-            DispatchQueue.main.async { self.stop(); self.shuttingDown = false; done() }
+            DispatchQueue.main.async {
+                self.stop()
+                self.shuttingDown = false
+                let waiting = self.afterShutdown
+                self.afterShutdown = []
+                for done in waiting { done() }
+            }
         }
     }
 
@@ -161,7 +172,7 @@ final class Board: ObservableObject, @unchecked Sendable {
             leds = 0
             lastGen = 0
             error = nil
-            start()
+            if !quitting { start() }
             done(failure)
         }
     }
@@ -195,7 +206,7 @@ final class Board: ObservableObject, @unchecked Sendable {
             if let unzipped { try? FileManager.default.removeItem(at: unzipped) }
             DispatchQueue.main.async { [self] in
                 guard rc == 0 else { done(String(cString: err)); return }
-                if board == nil {
+                if board == nil && !quitting {
                     needsFirmware = false
                     error = nil
                     start()

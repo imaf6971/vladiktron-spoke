@@ -46,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// +Drive first (a couple of seconds, with "Shutting down..." on the screen).
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard board.running else { return .terminateNow }
+        board.quitting = true
         board.shutDown { NSApp.reply(toApplicationShouldTerminate: true) }
         return .terminateLater
     }
