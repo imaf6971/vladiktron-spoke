@@ -15,10 +15,14 @@ UC=vendor/unicorn
 JOBS=$(sysctl -n hw.ncpu)
 mkdir -p build
 
-# 1. Unicorn 2.1.4 with this project's ColdFire changes (vendor/README.md), m68k only, static
-if [ ! -f build/unicorn/Makefile ]; then
+# 1. Unicorn 2.1.4 with this project's ColdFire changes (vendor/README.md), m68k only, static. Built for the
+#    app's oldest macOS (Package.swift, Info.plist), not the build machine's; a build/unicorn configured for
+#    another one is configured again (and rebuilt).
+MACOS_MIN=14.0
+if [ ! -f build/unicorn/Makefile ] ||
+   ! grep -q "^CMAKE_OSX_DEPLOYMENT_TARGET:[A-Z]*=$MACOS_MIN\$" build/unicorn/CMakeCache.txt; then
     cmake -S $UC -B build/unicorn -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DUNICORN_ARCH=m68k \
-        -DUNICORN_BUILD_TESTS=OFF > build/unicorn-config.log
+        -DUNICORN_BUILD_TESTS=OFF -DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOS_MIN > build/unicorn-config.log
 fi
 cmake --build build/unicorn -j "$JOBS" > build/unicorn-build.log 2>&1
 

@@ -22,13 +22,14 @@ practical. `./build.sh` is clean. `./test.sh` passes: `mcunit_test` with 14 chec
 | R6 keys on deactivate and in dialogs | `d2af5f2` | build only: **click it through** (hold Shift, ⌘-Tab away; type in the Open panel) |
 | U1 alert text | `73dbc2c` | build |
 | D2 test hooks, `test.sh` total | `193bcb4` | scripted run: the route was not saved, and the script ran once across a reset |
+| B1 Unicorn for macOS 14 | (this commit) | no linker warnings; Unicorn objects and the app binary say `minos 14.0`; `test.sh`, `mcusb_test`, `mcshutdown_test` pass. Not run on a real macOS 14 Mac. |
 
 Left from R11: `emmc_save_ext` (not atomic), `MidiStreamParser`'s unbounded SysEx (belongs with R4), and the
 `MiniLab.rescan` thread race. `README.md`'s Pieces table doesn't list `mcunit_test` yet: it had your
 uncommitted edits, so I left it alone.
 
 **New findings while implementing**
-- **B1 — Medium, S. Unicorn is built for macOS 27, but the app says macOS 14+.** The linker warns about every
+- **[done, see below] B1 — Medium, S. Unicorn is built for macOS 27, but the app says macOS 14+.** The linker warns about every
   Unicorn object: "built for newer 'macOS' version (27.0) than being linked (14.0)". `build.sh` doesn't pass
   `CMAKE_OSX_DEPLOYMENT_TARGET`, so Unicorn targets the build machine's OS. On an older macOS the app may fail to
   load or run. *Fix:* `-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0` in `build.sh` (and remove `build/unicorn` once).
