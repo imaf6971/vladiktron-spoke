@@ -8,7 +8,7 @@
 //   pads A1-A6           the six pads, with velocity and pressure
 //   pad A7 / A8          PLAY / STOP
 //   pads B1-B6           select track 1-6 (TRACK + pad)
-//   pad B7 / B8          RECORD / TAP TEMPO
+//   pad B7 / B8          RECORD / TEMPO
 //   knobs 1-8            PITCH DECAY COLOR SHAPE / SWEEP CONTOUR DELAY REVERB
 //   faders 1-4           LFO SPEED, VOLUME + DIST, SWING, CHANCE (the fader position is the value)
 //   pitch / mod strips   pitch bend and CC 1 on the auto channel
@@ -21,14 +21,18 @@
 //
 //   Shift                FUNC (held while Shift is held)
 //   main encoder         LEVEL/DATA, press = LEVEL/DATA press
-//   Shift + encoder press  a menu on the display: LFO SETUP, PAD MENU, PRESET MENU, TEMP SAVE, and keys PANEL (the
-//                        default) <-> NOTES (play the active track); turn the encoder to pick, press it to fire
+//   Shift + encoder press  a menu on the display: LFO, SETTINGS, MACHINES, TEMPO, and keys PANEL (the default) <->
+//                        NOTES (play the active track); turn the encoder to pick, press it to press the key, Shift +
+//                        press for its FUNC function (LFO SETUP, save pattern, PRESET, tap tempo)
 //   knobs 1-8            PITCH DECAY COLOR SHAPE / SWEEP CONTOUR DELAY REVERB, endless
 //   faders 1-4           LFO SPEED, VOLUME + DIST, SWING, CHANCE: the fader position is the value
 //   pads A1-A6, A7, A8   the six pads, PLAY, STOP
-//   pads B1-B8           (optional) RECORD PATTERN TRACK PAGE / RETRIG LFO-SETUP PAD-MENU PRESET-MENU
+//   pads B1-B8           (optional) RECORD PATTERN TRACK PAGE / RETRIG LFO BACK MACHINES
 //   PANEL keys           (octave at 0) F3-G#4 = trigs 1-16; C3-E3 = FUNC RECORD PATTERN TRACK PAGE;
-//                        A4-C5 = RETRIG QUANTIZE CLICK TEMPO
+//                        A4-C5 = RETRIG PUNCH GATE BACK
+//
+// Key names are the printed ones; mcboard.h names some keys after their FUNC function (PRESET MENU = MACHINES,
+// QUANTIZE = PUNCH, CLICK = GATE, LFO SETUP = LFO, TAP BPM = TEMPO, TEMP SAVE = SETTINGS, PAD MENU = BACK).
 //
 // Knobs send absolute values; each change of one becomes one encoder detent on the Model:Cycles. In DAW mode each
 // value a knob or the main encoder moves is one value step on the Model:Cycles, sent as single OS knob events (see
@@ -72,7 +76,7 @@ final class MiniLab {
         var m: [UInt8: Int] = [:]
         for (i, k) in [10, 9, 11, 13, 30].enumerated() { m[48 + UInt8(i)] = k } // C3-E3
         for i in 0..<16 { m[53 + UInt8(i)] = 14 + i }                          // F3-G#4: trigs 1-16
-        for (i, k) in [12, 1, 2, 4].enumerated() { m[69 + UInt8(i)] = k }      // A4-C5
+        for (i, k) in [12, 1, 2, 8].enumerated() { m[69 + UInt8(i)] = k }      // A4-C5
         return m
     }()
     static let sysex: [UInt8] = [0xF0, 0x00, 0x20, 0x6B, 0x7F, 0x42]
@@ -322,10 +326,12 @@ final class MiniLab {
             if let i = menu { menu = min(max(i + (v - 64).signum(), 0), MiniLab.menuItems.count - 1); showMenu() }
             else { panel.nudge(1, (v - 64).signum()) }   // one event per click: LEVEL/DATA ignores no first step
         case 118 where menu != nil || menuPress:                                 // menu: fire on press
-            if v > 0 { fireMenu() } else { menuPress = false }
+            if v > 0 { fireMenu(); menuPress = true } else { menuPress = false }
+        case 119 where menu != nil:                                              // menu: Shift + press fires the
+            if v > 0 { fireMenu() }                                              // FUNC function (Shift = FUNC)
         case 118: panel.key(31, v > 0)                                           // its press
         case 119:                                                                // Shift + press: menu
-            if v > 0 { if menu == nil { menu = 0; showMenu() } else { menu = nil; showLayer() } }
+            if v > 0 { menu = 0; showMenu() }
         case 105...109:                                                          // Shift + pads 4-8: FUNC + pad
             padButton(id: cc, index: Int(cc) - 105 + 3, bankB: currentBankB, down: v > 0)
         default: return false
@@ -417,11 +423,12 @@ final class MiniLab {
 
     // MARK: display and LEDs
 
-    // The menu (Shift + main encoder press): name, panel key (nil: switch the keys between PANEL and NOTES)
-    static let menuItems: [(String, Int?)] = [("LFO SETUP", 3), ("PAD MENU", 8), ("PRESET MENU", 0),
-                                              ("TEMP SAVE", 6), ("KEYS", nil)]
+    // The menu (Shift + main encoder press): shown as "key/FUNC function", panel key (nil: switch the keys between
+    // PANEL and NOTES)
+    static let menuItems: [(String, Int?)] = [("LFO/LFO SETUP", 3), ("SETTINGS/SAVE PTN", 6), ("MACHINES/PRESET", 0),
+                                              ("TEMPO/TAP", 4), ("KEYS", nil)]
     private var menu: Int?                            // highlighted item while the menu is open
-    private var menuPress = false                     // the encoder press that fired an item is still down
+    private var menuPress = false                     // the plain encoder press that fired an item is still down
     private var menuOpened: TimeInterval = 0
 
     private func showMenu() {
@@ -443,7 +450,6 @@ final class MiniLab {
     private func fireMenu() {
         guard let i = menu else { return }
         menu = nil
-        menuPress = true
         if let k = MiniLab.menuItems[i].1 {
             panel.key(k, true)
             DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.1) { [panel] in panel.key(k, false) }

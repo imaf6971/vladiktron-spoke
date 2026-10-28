@@ -80,21 +80,22 @@ first, and shut the OS down cleanly before they change any files.
   |---|---|
   | Shift | FUNC, held while Shift is held |
   | main encoder, its press | LEVEL/DATA, LEVEL/DATA press |
-  | Shift + main encoder press | a menu on the display: LFO SETUP, PAD MENU, PRESET MENU, TEMP SAVE, keys PANEL (the default) ⇄ NOTES (play the active track); turn the encoder to pick, press it to fire |
+  | Shift + main encoder press | a menu on the display: LFO, SETTINGS, MACHINES, TEMPO, keys PANEL (the default) ⇄ NOTES (play the active track); turn the encoder to pick, press it to press the key, Shift + press for its FUNC function (LFO SETUP, save pattern, PRESET, tap tempo) |
   | knobs 1–8 (endless) | PITCH, DECAY, COLOR, SHAPE, SWEEP, CONTOUR, DELAY SEND, REVERB SEND |
   | faders 1–4 | LFO SPEED, VOLUME + DIST, SWING, CHANCE: the fader position is the value (sent as MIDI CC 102, 7, 15, 14 on the auto channel) |
   | pads A1–A6, A7, A8 | the six pads (velocity), PLAY, STOP |
-  | pads B1–B8 (optional) | RECORD, PATTERN, TRACK, PAGE, RETRIG, LFO SETUP, PAD MENU, PRESET MENU |
-  | PANEL keys (octave 0) | F3–G#4 = trigs 1–16; C3–E3 = FUNC, RECORD, PATTERN, TRACK, PAGE; A4–C5 = RETRIG, QUANTIZE, CLICK, TEMPO |
+  | pads B1–B8 (optional) | RECORD, PATTERN, TRACK, PAGE, RETRIG, LFO, BACK, MACHINES |
+  | PANEL keys (octave 0) | F3–G#4 = trigs 1–16; C3–E3 = FUNC, RECORD, PATTERN, TRACK, PAGE; A4–C5 = RETRIG, PUNCH, GATE, BACK |
   | pitch and mod strips | pitch bend and CC 1 on the auto channel |
 
-  Shift + pads 1–3 stay the MiniLab's own (pad bank, program), so FUNC + those pads goes through the FUNC key of
-  the PANEL layer. Each value a knob moves is one value step on the Model:Cycles; turned fast, the
+  Shift + a key gives its FUNC function, as printed under the Model:Cycles keys (Shift + BACK opens the pad
+  configuration menu, Shift + PUNCH the QUANTIZE menu, and so on). Shift + pads 1–3 stay the MiniLab's own (pad
+  bank, program), so FUNC + those pads goes through the FUNC key of the PANEL layer. Each value a knob moves is one value step on the Model:Cycles; turned fast, the
   Model:Cycles speeds up as with its own knobs.
 
   In its Arturia mode, with factory settings, the MiniLab plays the Model:Cycles with a smaller mapping: keys and
   strips play the active track, pads A1–A6 are the pads, A7 / A8 PLAY / STOP, B1–B6 select track 1–6, B7 / B8
-  RECORD / TAP TEMPO, knobs 1–8 (absolute: they stop at 0 and 127) and faders 1–4 as above. Other MiniLab
+  RECORD / TEMPO, knobs 1–8 (absolute: they stop at 0 and 127) and faders 1–4 as above. Other MiniLab
   programs (or controllers) need their CC numbers in `MiniLab.swift`.
 
 ## Licence
