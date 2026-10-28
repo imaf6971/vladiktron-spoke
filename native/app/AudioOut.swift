@@ -8,6 +8,7 @@ import CoreAudio
 final class AudioOut {
     private let engine = AVAudioEngine()
     private var source: AVAudioSourceNode?
+    private var tmp: UnsafeMutablePointer<Float>?       // the render block's scratch buffer, freed by stop()
     private let name: String
     private let read: (UnsafeMutablePointer<Float>, Int) -> Int
     private let available: () -> Int
@@ -29,6 +30,7 @@ final class AudioOut {
         let read = self.read, available = self.available, name = self.name
         let fmt = AVAudioFormat(standardFormatWithSampleRate: AudioOut.rate, channels: 2)!
         let tmp = UnsafeMutablePointer<Float>.allocate(capacity: 2 * 8192)
+        self.tmp = tmp
         var primed = false
         var played = 0, underruns = 0, drops = 0, lastLog = 0
         var peak: Float = 0
@@ -76,5 +78,9 @@ final class AudioOut {
         engine.stop()
         if let s = source { engine.detach(s) }
         source = nil
+        tmp?.deallocate()                               // after engine.stop: no render block runs any more
+        tmp = nil
     }
+
+    deinit { stop() }                                   // (UsbAudio drops an output that would not start)
 }
