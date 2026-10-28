@@ -13,6 +13,7 @@ native/mcusb_test
 native/mcshutdown_test
 native/mcrt_test
 native/mcinstall
+native/mctiming_test
 
 # The user's firmware, disk images and recordings
 *.syx

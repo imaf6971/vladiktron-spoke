@@ -2,7 +2,8 @@
 # Builds the Model:Cycles virtual board and the Mac app from this repository alone (nothing is downloaded).
 #   ./build.sh [path/to/model-cycles_OS1.13.syx]
 # Needs: CMake and the Xcode command line tools (clang, make, swift).
-# Produces: ./mcinstall, ./mcbench, ./mcboot, ./mcaudio_test, ./mcmidi_test, ./mcusb_test, ./mcshutdown_test, ./mcrt_test
+# Produces: ./mcinstall, ./mcbench, ./mcboot, ./mcaudio_test, ./mcmidi_test, ./mcusb_test, ./mcshutdown_test, ./mcrt_test,
+#           ./mctiming_test
 #           and build/Vladiktron Spoke.app, signed with the hardened runtime: ad hoc, or with SIGN_ID="Developer ID
 #           Application: ..." for distribution. If the .syx is there, also build/main_os.bin + build/flash.bin (for the
 #           command-line tools), and installs the firmware into ~/Library/Application Support/Vladiktron Spoke as the
@@ -42,6 +43,7 @@ cc $CFLAGS mcboard.c mcmidi_test.c $LIBS -o mcmidi_test
 cc $CFLAGS mcboard.c mcusb_test.c $LIBS -o mcusb_test
 cc $CFLAGS mcboard.c mcshutdown_test.c $LIBS -o mcshutdown_test
 cc $CFLAGS mcboard.c mcrt_test.c $LIBS -o mcrt_test
+cc $CFLAGS mcboard.c mctiming_test.c $LIBS -o mctiming_test
 
 # 4. Mac app: the Swift package (Package.swift), wrapped into a bundle and signed with the hardened runtime and
 #    app/Spoke.entitlements (JIT, audio input)

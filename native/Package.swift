@@ -25,5 +25,11 @@ let package = Package(
             exclude: ["Info.plist", "Spoke.entitlements"],
             linkerSettings: [.unsafeFlags([unicorn]), .linkedLibrary("z")]
         ),
+        .testTarget(                                  // `swift test`: the MiniLab mapping (tests/swift)
+            name: "VladiktronSpokeTests",
+            dependencies: ["VladiktronSpoke"],
+            path: "tests/swift",
+            linkerSettings: [.unsafeFlags([unicorn]), .linkedLibrary("z")]
+        ),
     ]
 )

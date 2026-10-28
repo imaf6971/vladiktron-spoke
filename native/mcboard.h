@@ -32,6 +32,12 @@ int mcb_powered_off(mcboard *b);
 // eMMC errors so far: commands the card did not answer, accesses past its end, failed image reads/writes (each
 // one is logged to stderr; MCB_EMMCLOG=1 logs every command).
 uint64_t mcb_emmc_errors(mcboard *b);
+// CPU exceptions the OS took (its handler prints "EXCEPTION ..." and halts: the OS is dead). 0 is healthy.
+uint64_t mcb_os_exceptions(mcboard *b);
+// For tests, between mcb_run calls on the same thread: copy n bytes of DDR at addr (-1 outside DDR), and read DMA
+// timer n's counter as the OS would.
+int mcb_peek(mcboard *b, uint32_t addr, void *out, size_t n);
+uint32_t mcb_timer_count(mcboard *b, int n);
 
 // Latest 128x64 screen: column-major, pixel (x, y) = bit 7-(y&7) of byte x*8 + y/8, y = 0 at the bottom.
 // Thread-safe snapshot, refreshed at ~60 Hz while running. Returns a counter that increases on change.

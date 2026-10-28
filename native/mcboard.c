@@ -48,6 +48,7 @@ void uc_m68k_kick(uc_engine *uc);
 // one the 12 kHz panel scan and the audio blocks pile up, and catching up costs more host CPU than it saved
 // (measured with mcrt_test: 125/250 us took 23 % CPU, 250/1000 us 48 % and blocks up to 5 ms late).
 #define IDLE_PC 0x400057e6u
+#define OS_EXCEPTION 0x40078ce2u                // the OS's CPU exception handler (prints, then halts)
 #define IDLE_MIN_US 125
 #define IDLE_MAX_US 250
 
@@ -107,6 +108,7 @@ struct mcboard {
     uint8_t enc_state[16];                  // current 2-bit Gray state per raw encoder
     uint8_t enc_shown[4];                   // encoder byte last presented per column 4..7
     uint8_t enc_wait[16];                   // column reads left before the encoder's next transition
+    atomic_ullong n_os_exceptions;          // entries into the OS's exception handler (0x40078ce2)
     atomic_int pad_level[7];                // pad pressure as ADC value, by pad 1..6
     int fp_col;
     uint64_t n_fp_reads, n_irq_taken;
@@ -1498,7 +1500,7 @@ mcboard *mcb_create(const uint8_t *os, size_t len, const char *flash_path, const
     uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_render_done, b, 0x400593e2, 0x400593e2);
     if (getenv("MCB_RTLOG")) uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_sof_irq, b, 0x40004318, 0x40004318);
     uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_power_off, b, POWER_OFF_SPIN, POWER_OFF_SPIN);
-    if (getenv("MCB_HANGLOG")) uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_exception, b, 0x40078ce2, 0x40078ce2);
+    uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_exception, b, OS_EXCEPTION, OS_EXCEPTION);
     if (!getenv("MCB_NOIDLE")) uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_idle, b, IDLE_PC, IDLE_PC);
     if (getenv("MCB_MIDILOG")) uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_midi_byte, b, 0x400012cc, 0x400012cc);
     uc_hook_add(b->uc, &h, UC_HOOK_MEM_UNMAPPED, (void *)on_unmapped, b, 1, 0);
@@ -1620,9 +1622,11 @@ static void hang_check(mcboard *b, double t, uint32_t pc, uint32_t sr) {
     fflush(stderr);
 }
 
-// The OS's exception handler (prints "EXCEPTION Vvv-Mf-Ppc", then halts): log the exception frame (MCB_HANGLOG).
+// The OS's exception handler (prints "EXCEPTION Vvv-Mf-Ppc", then halts): count its entries (mcb_os_exceptions)
+// and log the first one's exception frame (MCB_HANGLOG).
 static void on_exception(uc_engine *uc, uint64_t addr, uint32_t size, void *user) {
     mcboard *b = user; (void)addr; (void)size;
+    if (atomic_fetch_add(&b->n_os_exceptions, 1) > 0 || !getenv("MCB_HANGLOG")) return;   // log the first one
     uint32_t sp, frame, w[4] = {0}; uint8_t raw[16];
     uc_reg_read(uc, UC_M68K_REG_A7, &sp);
     uc_mem_read(uc, sp + 4, raw, 4); frame = (uint32_t)raw[0] << 24 | raw[1] << 16 | raw[2] << 8 | raw[3];
@@ -1693,6 +1697,15 @@ void mcb_stop(mcboard *b) {
 void mcb_power_key(mcboard *b, int down) { atomic_store(&b->power_key, down ? 1 : 0); }
 int mcb_powered_off(mcboard *b) { return atomic_load(&b->powered_off); }
 uint64_t mcb_emmc_errors(mcboard *b) { return b->n_emmc_err; }
+uint64_t mcb_os_exceptions(mcboard *b) { return atomic_load(&b->n_os_exceptions); }
+
+int mcb_peek(mcboard *b, uint32_t addr, void *out, size_t n) {
+    if (addr < 0x40000000u || (uint64_t)addr - 0x40000000u + n > DDR_SIZE) return -1;
+    memcpy(out, b->ddr + (addr - 0x40000000u), n);
+    return 0;
+}
+
+uint32_t mcb_timer_count(mcboard *b, int n) { return n >= 0 && n < 4 ? dtim_count(b, n) : 0; }
 
 // raw encoder index for each OS encoder number (inverse of the table at 0x4010ae1c)
 static const int enc_raw[17] = {-1, 3, 12, 0, 1, 2, 13, 4, 5, 6, 14, 8, 9, 10, 7, 11, 15};
