@@ -80,12 +80,12 @@ first, and shut the OS down cleanly before they change any files.
   |---|---|
   | Shift | FUNC, held while Shift is held |
   | main encoder, its press | LEVEL/DATA, LEVEL/DATA press |
-  | Shift + main encoder press | keys: PANEL (the default) ⇄ NOTES (play the active track) |
+  | Shift + main encoder press | a menu on the display: LFO SETUP, PAD MENU, PRESET MENU, TEMP SAVE, keys PANEL (the default) ⇄ NOTES (play the active track); turn the encoder to pick, press it to fire |
   | knobs 1–8 (endless) | PITCH, DECAY, COLOR, SHAPE, SWEEP, CONTOUR, DELAY SEND, REVERB SEND |
   | faders 1–4 | LFO SPEED, VOLUME + DIST, SWING, CHANCE: the fader position is the value (sent as MIDI CC 102, 7, 15, 14 on the auto channel) |
   | pads A1–A6, A7, A8 | the six pads (velocity), PLAY, STOP |
-  | pads B1–B8 | RECORD, PATTERN, TRACK, PAGE, RETRIG, LFO SETUP, PAD MENU, PRESET MENU |
-  | PANEL keys (octave 0) | F3–G#4 = trigs 1–16; C3–E3 = QUANTIZE, CLICK, TEMPO, TEMP SAVE, FUNC; A4–C5 = PLAY, STOP, RECORD, TRACK |
+  | pads B1–B8 (optional) | RECORD, PATTERN, TRACK, PAGE, RETRIG, LFO SETUP, PAD MENU, PRESET MENU |
+  | PANEL keys (octave 0) | F3–G#4 = trigs 1–16; C3–E3 = FUNC, RECORD, PATTERN, TRACK, PAGE; A4–C5 = RETRIG, QUANTIZE, CLICK, TEMPO |
   | pitch and mod strips | pitch bend and CC 1 on the auto channel |
 
   Shift + pads 1–3 stay the MiniLab's own (pad bank, program), so FUNC + those pads goes through the FUNC key of

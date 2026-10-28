@@ -21,13 +21,14 @@
 //
 //   Shift                FUNC (held while Shift is held)
 //   main encoder         LEVEL/DATA, press = LEVEL/DATA press
-//   Shift + encoder press  keys: PANEL (the default) <-> NOTES (play the active track)
+//   Shift + encoder press  a menu on the display: LFO SETUP, PAD MENU, PRESET MENU, TEMP SAVE, and keys PANEL (the
+//                        default) <-> NOTES (play the active track); turn the encoder to pick, press it to fire
 //   knobs 1-8            PITCH DECAY COLOR SHAPE / SWEEP CONTOUR DELAY REVERB, endless
 //   faders 1-4           LFO SPEED, VOLUME + DIST, SWING, CHANCE: the fader position is the value
 //   pads A1-A6, A7, A8   the six pads, PLAY, STOP
-//   pads B1-B8           RECORD PATTERN TRACK PAGE / RETRIG LFO-SETUP PAD-MENU PRESET-MENU
-//   PANEL keys           (octave at 0) F3-G#4 = trigs 1-16; C3-E3 = QUANTIZE CLICK TEMPO TEMP-SAVE FUNC;
-//                        A4-C5 = PLAY STOP RECORD TRACK
+//   pads B1-B8           (optional) RECORD PATTERN TRACK PAGE / RETRIG LFO-SETUP PAD-MENU PRESET-MENU
+//   PANEL keys           (octave at 0) F3-G#4 = trigs 1-16; C3-E3 = FUNC RECORD PATTERN TRACK PAGE;
+//                        A4-C5 = RETRIG QUANTIZE CLICK TEMPO
 //
 // Knobs send absolute values; each change of one becomes one encoder detent on the Model:Cycles. In DAW mode each
 // value a knob or the main encoder moves is one value step on the Model:Cycles, sent as single OS knob events (see
@@ -69,9 +70,9 @@ final class MiniLab {
     // PANEL keys, octave 0 (lowest key C3 = 48): note -> panel key
     static let panelMap: [UInt8: Int] = {
         var m: [UInt8: Int] = [:]
-        for (i, k) in [1, 2, 4, 6, 10].enumerated() { m[48 + UInt8(i)] = k }   // C3-E3
+        for (i, k) in [10, 9, 11, 13, 30].enumerated() { m[48 + UInt8(i)] = k } // C3-E3
         for i in 0..<16 { m[53 + UInt8(i)] = 14 + i }                          // F3-G#4: trigs 1-16
-        for (i, k) in [7, 5, 9, 13].enumerated() { m[69 + UInt8(i)] = k }      // A4-C5
+        for (i, k) in [12, 1, 2, 4].enumerated() { m[69 + UInt8(i)] = k }      // A4-C5
         return m
     }()
     static let sysex: [UInt8] = [0xF0, 0x00, 0x20, 0x6B, 0x7F, 0x42]
@@ -273,6 +274,7 @@ final class MiniLab {
         releaseAll()
         daw = true
         panelKeysOn = true
+        menu = nil
         sentColors = [:]
         send(MiniLab.sysex + [0x02, 0x00, 0x40, 0x6A, 0x21, 0xF7])                // colours need a connected DAW
         for (i, _) in MiniLab.dawKnobCC.enumerated() { recentre(i) }
@@ -315,10 +317,15 @@ final class MiniLab {
         }
         switch cc {
         case 27: panel.key(10, v > 0)                                            // Shift = FUNC
-        case 28, 29: if v != 64 { step(1, v - 64) }                             // main encoder (with Shift = FUNC)
+        case 28, 29:                                                             // main encoder (with Shift = FUNC)
+            guard v != 64 else { break }
+            if let i = menu { menu = min(max(i + (v - 64).signum(), 0), MiniLab.menuItems.count - 1); showMenu() }
+            else { panel.nudge(1, (v - 64).signum()) }   // one event per click: LEVEL/DATA ignores no first step
+        case 118 where menu != nil || menuPress:                                 // menu: fire on press
+            if v > 0 { fireMenu() } else { menuPress = false }
         case 118: panel.key(31, v > 0)                                           // its press
-        case 119:                                                                // Shift + press: keys layer
-            if v > 0 { panelKeysOn.toggle(); showLayer() }
+        case 119:                                                                // Shift + press: menu
+            if v > 0 { if menu == nil { menu = 0; showMenu() } else { menu = nil; showLayer() } }
         case 105...109:                                                          // Shift + pads 4-8: FUNC + pad
             padButton(id: cc, index: Int(cc) - 105 + 3, bankB: currentBankB, down: v > 0)
         default: return false
@@ -409,6 +416,42 @@ final class MiniLab {
     }
 
     // MARK: display and LEDs
+
+    // The menu (Shift + main encoder press): name, panel key (nil: switch the keys between PANEL and NOTES)
+    static let menuItems: [(String, Int?)] = [("LFO SETUP", 3), ("PAD MENU", 8), ("PRESET MENU", 0),
+                                              ("TEMP SAVE", 6), ("KEYS", nil)]
+    private var menu: Int?                            // highlighted item while the menu is open
+    private var menuPress = false                     // the encoder press that fired an item is still down
+    private var menuOpened: TimeInterval = 0
+
+    private func showMenu() {
+        guard let i = menu else { return }
+        let (name, key) = MiniLab.menuItems[i]
+        let item = key == nil ? (panelKeysOn ? "Keys -> NOTES" : "Keys -> PANEL") : name
+        display(line1: "Menu \(i + 1)/\(MiniLab.menuItems.count)", line2: item)
+        let opened = ProcessInfo.processInfo.systemUptime                        // closes after 5 s untouched
+        menuOpened = opened
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            if self.menu != nil, self.menuOpened == opened { self.menu = nil; self.showLayer() }
+            self.lock.unlock()
+        }
+    }
+
+    /// Presses the highlighted menu item (a key tap) and closes the menu.
+    private func fireMenu() {
+        guard let i = menu else { return }
+        menu = nil
+        menuPress = true
+        if let k = MiniLab.menuItems[i].1 {
+            panel.key(k, true)
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.1) { [panel] in panel.key(k, false) }
+        } else {
+            panelKeysOn.toggle()
+        }
+        showLayer()
+    }
 
     private func showLayer() {
         display(line1: "Spoke", line2: panelKeysOn ? "Keys: PANEL" : "Keys: NOTES")
