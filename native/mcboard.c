@@ -17,6 +17,7 @@ void uc_m68k_set_irq(uc_engine *uc, int level, int vector);   // patched Unicorn
 void uc_m68k_kick(uc_engine *uc);
 
 #define DDR_SIZE 0x08000000u
+#define MCB_FLASH_SIZE 0x200000u     // EN25QH16: 2 MB (flash.bin, as mcfirmware.c writes it)
 #define OS_BASE 0x40000400u
 #define OS_ENTRY 0x400004e8u
 #define SCREEN_PTR 0x401492f4u
@@ -1474,8 +1475,15 @@ mcboard *mcb_create(const uint8_t *os, size_t len, const char *flash_path, const
     FILE *f = fopen(flash_path, "rb");
     if (!f) { snprintf(err, errlen, "cannot open flash image %s", flash_path); goto fail; }
     fseek(f, 0, SEEK_END);
-    b->flash.size = (size_t)ftell(f);
+    long fsize = ftell(f);
     fseek(f, 0, SEEK_SET);
+    if (fsize != MCB_FLASH_SIZE) {                           // (an empty one would divide by zero in flash_xfer)
+        fclose(f);
+        snprintf(err, errlen, "flash image %s is damaged: %ld bytes, not 2 MB (Factory reset puts back the factory "
+                 "image)", flash_path, fsize);
+        goto fail;
+    }
+    b->flash.size = MCB_FLASH_SIZE;
     b->flash.mem = malloc(b->flash.size);
     if (fread(b->flash.mem, 1, b->flash.size, f) != b->flash.size) { fclose(f); snprintf(err, errlen, "short flash read"); goto fail; }
     fclose(f);
