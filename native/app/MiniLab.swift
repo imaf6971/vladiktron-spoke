@@ -21,13 +21,13 @@
 //
 //   Shift                FUNC (held while Shift is held)
 //   main encoder         LEVEL/DATA, press = LEVEL/DATA press
-//   Shift + encoder press  keys: NOTES (play the active track) <-> PANEL
+//   Shift + encoder press  keys: PANEL (the default) <-> NOTES (play the active track)
 //   knobs 1-8            PITCH DECAY COLOR SHAPE / SWEEP CONTOUR DELAY REVERB, endless
 //   faders 1-4           LFO SPEED, VOLUME + DIST, SWING, CHANCE
 //   pads A1-A6, A7, A8   the six pads, PLAY, STOP
 //   pads B1-B8           RECORD PATTERN TRACK PAGE / RETRIG LFO-SETUP PAD-MENU PRESET-MENU
-//   PANEL keys           the lowest 16 keys = trigs 1-16 (octave at 0); the next nine = QUANTIZE CLICK TEMPO
-//                        TEMP-SAVE FUNC PLAY STOP RECORD TRACK
+//   PANEL keys           (octave at 0) F3-G#4 = trigs 1-16; C3-E3 = QUANTIZE CLICK TEMPO TEMP-SAVE FUNC;
+//                        A4-C5 = PLAY STOP RECORD TRACK
 //
 // Knobs and faders send absolute values; each change of one becomes one encoder detent on the Model:Cycles. In DAW
 // mode each value a knob, fader or the main encoder moves is one value step on the Model:Cycles, sent as single OS
@@ -62,8 +62,14 @@ final class MiniLab {
                                "REVERB", "LFO SPEED", "VOL+DIST", "SWING", "CHANCE"]
     static let bankAKeys = [6: 7, 7: 5]                                           // pads A7 / A8 (0-based): PLAY, STOP
     static let bankBKeys = [9, 11, 13, 30, 12, 3, 8, 0]                           // pads B1-B8
-    static let panelKeys = [1, 2, 4, 6, 10, 7, 5, 9, 13]                          // PANEL keys 17-25
-    static let panelBase: UInt8 = 48                                              // lowest key, octave 0
+    // PANEL keys, octave 0 (lowest key C3 = 48): note -> panel key
+    static let panelMap: [UInt8: Int] = {
+        var m: [UInt8: Int] = [:]
+        for (i, k) in [1, 2, 4, 6, 10].enumerated() { m[48 + UInt8(i)] = k }   // C3-E3
+        for i in 0..<16 { m[53 + UInt8(i)] = 14 + i }                          // F3-G#4: trigs 1-16
+        for (i, k) in [7, 5, 9, 13].enumerated() { m[69 + UInt8(i)] = k }      // A4-C5
+        return m
+    }()
     static let sysex: [UInt8] = [0xF0, 0x00, 0x20, 0x6B, 0x7F, 0x42]
     static let trackColors: [(UInt8, UInt8, UInt8)] = [(127, 20, 20), (127, 70, 0), (110, 110, 0),
                                                        (0, 110, 30), (0, 70, 127), (90, 0, 127)]
@@ -84,7 +90,7 @@ final class MiniLab {
 
     // DAW mode state (under lock)
     private var daw = false
-    private var panelKeysOn = false                   // keys: PANEL instead of NOTES
+    private var panelKeysOn = true                    // keys: PANEL instead of NOTES
     private var heldKeys: [UInt8: Int] = [:]          // PANEL key note -> panel key, so a release always matches
     private var heldPadKeys: [UInt8: Int] = [:]       // pad note or CC -> panel key
     private var sentColors: [UInt8: (UInt8, UInt8, UInt8)] = [:]
@@ -260,7 +266,7 @@ final class MiniLab {
     private func enterDAW() {
         releaseAll()
         daw = true
-        panelKeysOn = false
+        panelKeysOn = true
         sentColors = [:]
         send(MiniLab.sysex + [0x02, 0x00, 0x40, 0x6A, 0x21, 0xF7])                // colours need a connected DAW
         for (i, _) in MiniLab.dawKnobCC.enumerated() { recentre(i) }
@@ -346,12 +352,7 @@ final class MiniLab {
             if let k = heldKeys.removeValue(forKey: note) { panel.key(k, false) }
             return
         }
-        guard note >= MiniLab.panelBase else { return }
-        let i = Int(note - MiniLab.panelBase)
-        let k: Int
-        if i < 16 { k = 14 + i }                                                 // trigs 1-16
-        else if i - 16 < MiniLab.panelKeys.count { k = MiniLab.panelKeys[i - 16] }
-        else { return }
+        guard let k = MiniLab.panelMap[note] else { return }
         heldKeys[note] = k
         panel.key(k, true)
     }
