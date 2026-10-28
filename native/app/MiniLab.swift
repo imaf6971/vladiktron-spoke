@@ -21,15 +21,14 @@
 //
 //   Shift                FUNC (held while Shift is held)
 //   main encoder         LEVEL/DATA, press = LEVEL/DATA press
-//   Shift + encoder press  a menu on the display: LFO, SETTINGS, MACHINES, TEMPO, and keys PANEL (the default) <->
-//                        NOTES (play the active track); turn the encoder to pick, press it to press the key, Shift +
-//                        press for its FUNC function (LFO SETUP, save pattern, PRESET, tap tempo)
+//   Shift + encoder press  keys: PANEL (the default) <-> NOTES (play the active track; strips: pitch bend and mod)
 //   knobs 1-8            PITCH DECAY COLOR SHAPE / SWEEP CONTOUR DELAY REVERB, endless
 //   faders 1-4           LFO SPEED, VOLUME + DIST, SWING, CHANCE: the fader position is the value
 //   pads A1-A6, A7, A8   the six pads, PLAY, STOP
 //   pads B1-B8           (optional) RECORD PATTERN TRACK PAGE / RETRIG LFO BACK MACHINES
 //   PANEL keys           (octave at 0) F3-G#4 = trigs 1-16; C3-E3 = FUNC RECORD PATTERN TRACK PAGE;
-//                        A4-C5 = RETRIG PUNCH GATE BACK
+//                        A4-C5 = RETRIG PUNCH GATE BACK; Shift + key = its FUNC function
+//   PANEL strips         tap the upper / lower half: pitch strip TEMPO / SETTINGS, mod strip MACHINES / LFO
 //
 // Key names are the printed ones; mcboard.h names some keys after their FUNC function (PRESET MENU = MACHINES,
 // QUANTIZE = PUNCH, CLICK = GATE, LFO SETUP = LFO, TAP BPM = TEMPO, TEMP SAVE = SETTINGS, PAD MENU = BACK).
@@ -211,8 +210,8 @@ final class MiniLab {
         case 0x80, 0x90:                                         // keys: the active track, or the PANEL layer
             if daw && (panelKeysOn || heldKeys[d1] != nil) { panelKey(note: d1, down: kind == 0x90 && d2 > 0) }
             else { notes.send([kind | MiniLab.autoChannel] + m.dropFirst()) }
-        case 0xE0:                                               // pitch bend: the active track
-            notes.send([kind | MiniLab.autoChannel] + m.dropFirst())
+        case 0xE0:                                               // pitch bend: the active track, or PANEL keys
+            if daw && panelKeysOn { strip(0, Int(d2)) } else { notes.send([kind | MiniLab.autoChannel] + m.dropFirst()) }
         case 0xB0:
             if !daw, let enc = MiniLab.knobCC[d1], MiniLab.faderParamCC[enc] != nil {
                 fader(enc, d2)
@@ -220,6 +219,8 @@ final class MiniLab {
                 let v = Int(d2)
                 if let last = lastCC[d1], v != last { panel.turn(enc, v - last) }
                 lastCC[d1] = v
+            } else if daw && panelKeysOn && d1 == 1 {            // mod strip: PANEL keys
+                strip(1, Int(d2))
             } else if d1 == 1 || d1 == 64 {                      // mod strip, sustain
                 notes.send([0xB0 | MiniLab.autoChannel, d1, d2])
             }
@@ -278,7 +279,6 @@ final class MiniLab {
         releaseAll()
         daw = true
         panelKeysOn = true
-        menu = nil
         sentColors = [:]
         send(MiniLab.sysex + [0x02, 0x00, 0x40, 0x6A, 0x21, 0xF7])                // colours need a connected DAW
         for (i, _) in MiniLab.dawKnobCC.enumerated() { recentre(i) }
@@ -322,16 +322,10 @@ final class MiniLab {
         switch cc {
         case 27: panel.key(10, v > 0)                                            // Shift = FUNC
         case 28, 29:                                                             // main encoder (with Shift = FUNC)
-            guard v != 64 else { break }
-            if let i = menu { menu = min(max(i + (v - 64).signum(), 0), MiniLab.menuItems.count - 1); showMenu() }
-            else { panel.nudge(1, (v - 64).signum()) }   // one event per click: LEVEL/DATA ignores no first step
-        case 118 where menu != nil || menuPress:                                 // menu: fire on press
-            if v > 0 { fireMenu(); menuPress = true } else { menuPress = false }
-        case 119 where menu != nil:                                              // menu: Shift + press fires the
-            if v > 0 { fireMenu() }                                              // FUNC function (Shift = FUNC)
+            if v != 64 { panel.nudge(1, (v - 64).signum()) }   // one event per click: LEVEL/DATA ignores no first step
         case 118: panel.key(31, v > 0)                                           // its press
-        case 119:                                                                // Shift + press: menu
-            if v > 0 { menu = 0; showMenu() }
+        case 119:                                                                // Shift + press: keys PANEL <-> NOTES
+            if v > 0 { panelKeysOn.toggle(); showLayer() }
         case 105...109:                                                          // Shift + pads 4-8: FUNC + pad
             padButton(id: cc, index: Int(cc) - 105 + 3, bankB: currentBankB, down: v > 0)
         default: return false
@@ -423,40 +417,33 @@ final class MiniLab {
 
     // MARK: display and LEDs
 
-    // The menu (Shift + main encoder press): shown as "key/FUNC function", panel key (nil: switch the keys between
-    // PANEL and NOTES)
-    static let menuItems: [(String, Int?)] = [("LFO/LFO SETUP", 3), ("SETTINGS/SAVE PTN", 6), ("MACHINES/PRESET", 0),
-                                              ("TEMPO/TAP", 4), ("KEYS", nil)]
-    private var menu: Int?                            // highlighted item while the menu is open
-    private var menuPress = false                     // the plain encoder press that fired an item is still down
-    private var menuOpened: TimeInterval = 0
+    // PANEL mode: the touch strips as four tap keys, laid out as on the Model:Cycles (pitch strip: TEMPO above,
+    // SETTINGS below; mod strip: MACHINES above, LFO below). With Shift (FUNC) held they give the FUNC function: tap
+    // tempo, save pattern, PRESET, LFO SETUP. A strip sends only values. The pitch strip rests at 64 and springs back
+    // there when let go, so a tap is a value away from the middle after one at rest (quick taps are 60-100 ms apart,
+    // spring-back included); the mod strip reads 0-127 from bottom to top and has no rest, so a tap is values after
+    // a quiet spell.
+    static let stripKeys: [(upper: (String, Int), lower: (String, Int))] = [(("TEMPO", 4), ("SETTINGS", 6)),
+                                                                           (("MACHINES", 0), ("LFO", 3))]
+    private var stripLast: TimeInterval = 0           // mod strip: time of its last value
+    private var stripArmed = [true, true]             // per strip: the next touch presses a key
 
-    private func showMenu() {
-        guard let i = menu else { return }
-        let (name, key) = MiniLab.menuItems[i]
-        let item = key == nil ? (panelKeysOn ? "Keys -> NOTES" : "Keys -> PANEL") : name
-        display(line1: "Menu \(i + 1)/\(MiniLab.menuItems.count)", line2: item)
-        let opened = ProcessInfo.processInfo.systemUptime                        // closes after 5 s untouched
-        menuOpened = opened
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { [weak self] in
-            guard let self else { return }
-            self.lock.lock()
-            if self.menu != nil, self.menuOpened == opened { self.menu = nil; self.showLayer() }
-            self.lock.unlock()
-        }
-    }
-
-    /// Presses the highlighted menu item (a key tap) and closes the menu.
-    private func fireMenu() {
-        guard let i = menu else { return }
-        menu = nil
-        if let k = MiniLab.menuItems[i].1 {
-            panel.key(k, true)
-            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.1) { [panel] in panel.key(k, false) }
+    /// Value `v` (0-127) from strip 0 (pitch) or 1 (mod) in PANEL mode.
+    private func strip(_ id: Int, _ v: Int) {
+        if id == 0 {
+            if abs(v - 64) <= 2 { stripArmed[0] = true; return }                 // at rest
+            if abs(v - 64) < 12 { return }                                       // leaving or reaching the middle
         } else {
-            panelKeysOn.toggle()
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - stripLast > 0.15 { stripArmed[1] = true }
+            stripLast = now
         }
-        showLayer()
+        guard stripArmed[id] else { return }
+        stripArmed[id] = false
+        let (name, k) = (id == 0 ? v > 64 : v >= 64) ? MiniLab.stripKeys[id].upper : MiniLab.stripKeys[id].lower
+        panel.key(k, true)
+        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.05) { [panel] in panel.key(k, false) }
+        display(line1: "Spoke", line2: name)
     }
 
     private func showLayer() {
