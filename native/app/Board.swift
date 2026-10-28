@@ -6,7 +6,6 @@ import SwiftUI
 final class Board: ObservableObject, @unchecked Sendable {
     @Published var screen: CGImage?
     @Published var leds: UInt64 = 0
-    @Published var status = "Starting…"
     @Published var error: String?
     @Published var needsFirmware = false                // no OS installed yet: the panel asks for the .syx
     @Published var usbState: Int32 = 0                  // mcb_usb_state
@@ -162,7 +161,6 @@ final class Board: ObservableObject, @unchecked Sendable {
             leds = 0
             lastGen = 0
             error = nil
-            status = "Starting…"
             start()
             done(failure)
         }
@@ -280,10 +278,16 @@ final class Board: ObservableObject, @unchecked Sendable {
         if l != leds { leds = l }
         let u = mcb_usb_state(b)
         if u != usbState { usbState = u }
+        snapshotIfRequested()
+    }
+
+    /// The board's one-line diagnostics (mcb_status), made when asked. Not published: its uptime changes every
+    /// frame, and publishing it redrew the whole panel 60 times a second.
+    var status: String {
+        guard let b = board else { return "Starting…" }
         var st = [CChar](repeating: 0, count: 512)
         mcb_status(b, &st, st.count)
-        status = String(cString: st)
-        snapshotIfRequested()
+        return String(cString: st)
     }
 
     // 128x64, column-major, pixel (x, y) = bit 7-(y&7) of byte x*8 + y/8, y = 0 at the bottom.
