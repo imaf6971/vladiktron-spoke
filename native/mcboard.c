@@ -318,7 +318,9 @@ static uint32_t dtim_count(mcboard *b, int n) {
         if (pc >= 0x400589c0u && pc < 0x40058a0au && b->dma50_stamp > 0) t = b->dma50_stamp;
         else if (pc >= 0x40004318u && pc < 0x400043fcu && b->usb.uframe) t = b->usb.t_run + 125.0 * (double)(b->usb.uframe - 1);
     }
-    return (uint32_t)(t * mhz / (((mode >> 8) & 0xFF) + 1));
+    // a free-running 32-bit counter wraps (internal clock: every 32 s). Casting a double past UINT32_MAX straight
+    // to uint32_t is undefined and sticks at 0xFFFFFFFF on arm64; tap tempo then divides by zero.
+    return (uint32_t)(uint64_t)(t * mhz / (((mode >> 8) & 0xFF) + 1));
 }
 // A due PIT fires (PIF + line). Called between slices and again whenever the handler acknowledges the timer,
 // so fast timers (the 12 kHz panel scan) keep their real rate inside a 1 ms slice; at most 5 ms of backlog.
@@ -882,6 +884,7 @@ static void format_ekfs_if_blank(mcboard *b) {
 }
 
 // The OS has nothing to do until its next interrupt (see IDLE_PC): end the slice, so the CPU thread can sleep.
+static void on_exception(uc_engine *uc, uint64_t addr, uint32_t size, void *user);
 static void on_idle(uc_engine *uc, uint64_t addr, uint32_t size, void *user) {
     mcboard *b = user;
     (void)addr; (void)size;
@@ -1495,6 +1498,7 @@ mcboard *mcb_create(const uint8_t *os, size_t len, const char *flash_path, const
     uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_render_done, b, 0x400593e2, 0x400593e2);
     if (getenv("MCB_RTLOG")) uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_sof_irq, b, 0x40004318, 0x40004318);
     uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_power_off, b, POWER_OFF_SPIN, POWER_OFF_SPIN);
+    if (getenv("MCB_HANGLOG")) uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_exception, b, 0x40078ce2, 0x40078ce2);
     if (!getenv("MCB_NOIDLE")) uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_idle, b, IDLE_PC, IDLE_PC);
     if (getenv("MCB_MIDILOG")) uc_hook_add(b->uc, &h, UC_HOOK_CODE, (void *)on_midi_byte, b, 0x400012cc, 0x400012cc);
     uc_hook_add(b->uc, &h, UC_HOOK_MEM_UNMAPPED, (void *)on_unmapped, b, 1, 0);
@@ -1593,6 +1597,48 @@ static void idle_sleep(mcboard *b, uint32_t sr) {
     b->rt.idle_us += us;
 }
 
+// MCB_HANGLOG=1 (debugging): when the OS has not reached IDLE_PC for 2 s, print where its slices end (top PCs,
+// SR) to stderr, once per hang.
+static double hang_t_idle; static int hang_n, hang_done; static uint32_t hang_pc[512], hang_sr[512];
+static void hang_idle(mcboard *b) { (void)b; hang_t_idle = 0; hang_n = 0; hang_done = 0; }
+static void hang_check(mcboard *b, double t, uint32_t pc, uint32_t sr) {
+    static int on = -1; if (on < 0) on = getenv("MCB_HANGLOG") != NULL;
+    if (!on || hang_done) return;
+    if (hang_t_idle == 0) { hang_t_idle = t; return; }
+    if (t - hang_t_idle < 2e6) return;
+    if (hang_n < 512) { hang_pc[hang_n] = pc; hang_sr[hang_n] = sr; hang_n++; return; }
+    hang_done = 1;
+    fprintf(stderr, "mcboard: HANG no idle for %.1f s; last 512 slice ends:\n", (t - hang_t_idle) / 1e6);
+    for (int i = 0; i < 512; i++) {
+        int seen = 0, n = 0;
+        for (int j = 0; j < i; j++) if (hang_pc[j] == hang_pc[i]) { seen = 1; break; }
+        if (seen) continue;
+        for (int j = i; j < 512; j++) n += hang_pc[j] == hang_pc[i];
+        fprintf(stderr, "  pc %08x sr %04x x%d\n", hang_pc[i], hang_sr[i], n);
+    }
+    char st[512]; mcb_status(b, st, sizeof st); fprintf(stderr, "  %s\n", st);
+    fflush(stderr);
+}
+
+// The OS's exception handler (prints "EXCEPTION Vvv-Mf-Ppc", then halts): log the exception frame (MCB_HANGLOG).
+static void on_exception(uc_engine *uc, uint64_t addr, uint32_t size, void *user) {
+    mcboard *b = user; (void)addr; (void)size;
+    uint32_t sp, frame, w[4] = {0}; uint8_t raw[16];
+    uc_reg_read(uc, UC_M68K_REG_A7, &sp);
+    uc_mem_read(uc, sp + 4, raw, 4); frame = (uint32_t)raw[0] << 24 | raw[1] << 16 | raw[2] << 8 | raw[3];
+    if (uc_mem_read(uc, frame, raw, 16) == UC_ERR_OK)
+        for (int i = 0; i < 4; i++) w[i] = (uint32_t)raw[4*i] << 24 | raw[4*i+1] << 16 | raw[4*i+2] << 8 | raw[4*i+3];
+    fprintf(stderr, "mcboard: OS EXCEPTION vector %u (frame %08x: %08x %08x %08x %08x) t=%.3f s\n",
+            (w[0] >> 18) & 0xFF, frame, w[0], w[1], w[2], w[3], (now_us() - b->t0) / 1e6);
+    uint32_t r[16];
+    for (int i = 0; i < 8; i++) { uc_reg_read(uc, UC_M68K_REG_D0 + i, &r[i]); uc_reg_read(uc, UC_M68K_REG_A0 + i, &r[8 + i]); }
+    fprintf(stderr, "  d0-7 %08x %08x %08x %08x %08x %08x %08x %08x\n  a0-7 %08x %08x %08x %08x %08x %08x %08x %08x\n",
+            r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15]);
+    uint8_t stk[64]; uc_mem_read(uc, frame, stk, 64);
+    fprintf(stderr, "  stack:"); for (int i = 0; i < 64; i++) fprintf(stderr, "%s%02x", i % 4 ? "" : " ", stk[i]);
+    fprintf(stderr, "\n"); fflush(stderr);
+}
+
 int mcb_run(mcboard *b, double seconds) {
     double end = seconds > 0 ? now_us() + seconds * 1e6 : 0;
     if (atomic_load(&b->powered_off)) return 0;              // powered off: nothing runs any more
@@ -1617,8 +1663,9 @@ int mcb_run(mcboard *b, double seconds) {
             ret = 1;
             break;
         }
-        if (b->idle) { b->idle = 0; idle_sleep(b, sr); }
+        if (b->idle) { b->idle = 0; idle_sleep(b, sr); hang_idle(b); }
         double t = now_us() - b->t0;
+        hang_check(b, t, pc, sr);
         timers_service(b, t);
         dma50_check(b, t);
         midi_rx_service(b, t);
