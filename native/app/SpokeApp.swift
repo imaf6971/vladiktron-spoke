@@ -105,8 +105,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func resetDrive() {
         guard confirm("Reset the +Drive?",
-                      detail: "The Model:Cycles shuts down and starts again with an empty +Drive, which the OS then " +
-                              "formats with its factory content. All projects and samples on the +Drive are erased. " +
+                      detail: "The Model:Cycles shuts down and starts again with an empty +Drive, which the OS sets " +
+                              "up at the next boot. All projects, presets and samples on the +Drive are erased. " +
                               "Settings are kept.",
                       button: "Reset +Drive") else { return }
         board.resetDrive { [weak self] in self?.report($0) }
@@ -120,9 +120,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         guard confirm("Factory reset?",
-                      detail: "The Model:Cycles shuts down and starts again as it left the factory: an empty +Drive " +
-                              "(formatted with its factory content) and factory settings. All projects, samples and " +
-                              "settings are erased.",
+                      detail: "The Model:Cycles shuts down and starts again with an empty +Drive and factory " +
+                              "settings. All projects, presets, samples and settings are erased.",
                       button: "Factory Reset") else { return }
         board.factoryReset { [weak self] in self?.report($0) }
     }
