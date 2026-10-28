@@ -132,9 +132,9 @@ window hidden, with no underruns. What remains:
   program change, CC/NRPN, track channels, auto channel.
 
 ### MiniLab 3
-- **DAW mode** (app/MiniLab.swift) was tested on a real MiniLab 3: display, pad colours, endless knobs, main encoder.
-  Still to check on the hardware: every pad and PANEL key against the panel, pad pressure in DAW mode (none seen
-  yet), and the colours for every LED state. Arturia mode was only checked with a simulated source.
+- **DAW mode** (app/MiniLab.swift) was tested on a real MiniLab 3: display, pad colours and LED feedback, endless
+  knobs, main encoder, both pad banks, the PANEL keys and Shift as FUNC. The pads send no pressure in DAW mode (none
+  seen). Arturia mode was only checked with a simulated source.
 - **Octave.** PANEL keys assume octave 0 (lowest key note 48); the MiniLab does not report Oct − / +.
 - **Other controllers.** A small Settings screen to choose the controller and learn CCs, so it isn't hard-coded.
 
