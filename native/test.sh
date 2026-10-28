@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 mkdir -p build
 ./mcunit_test
 if swift test > build/swift-test.log 2>&1; then
-    grep -m1 "Executed" build/swift-test.log
+    grep "Executed" build/swift-test.log | tail -1
 else
     grep -E "error:" build/swift-test.log; echo "swift test FAILED (build/swift-test.log)"; exit 1
 fi

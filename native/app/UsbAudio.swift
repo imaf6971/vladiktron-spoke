@@ -58,6 +58,8 @@ final class UsbAudio: ObservableObject {
     @Published var inputUID: String? { didSet { if inputUID != oldValue { save(); apply() } } }
     @Published private(set) var outputs: [AudioDevice] = []
     @Published private(set) var inputs: [AudioDevice] = []
+    /// Routes are saved as the user's settings (false for scripted runs: SPOKE_TEST).
+    var remember = true
 
     private var board: OpaquePointer?
     private var out: AudioOut?
@@ -99,6 +101,7 @@ final class UsbAudio: ObservableObject {
     }
 
     private func save() {
+        guard remember else { return }
         UserDefaults.standard.set(outputUID, forKey: "usbAudioOut")
         UserDefaults.standard.set(inputUID, forKey: "usbAudioIn")
     }

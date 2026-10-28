@@ -91,8 +91,11 @@ final class Board: ObservableObject, @unchecked Sendable {
     // Self-check: SPOKE_TEST="8:play,20:out=BuiltInSpeakerDevice,30:out=,60:quit" runs these steps at the
     // given seconds after launch: press PLAY, route USB audio out/in to a device UID (empty: nowhere), open the
     // About panel ("about"), Reset +Drive without asking ("reset": use it with SPOKE_DATA), quit.
+    private var testScriptRan = false
     private func runTestScript() {
-        guard let script = ProcessInfo.processInfo.environment["SPOKE_TEST"] else { return }
+        guard !testScriptRan, let script = ProcessInfo.processInfo.environment["SPOKE_TEST"] else { return }
+        testScriptRan = true                                // once per launch, not again after a restart
+        usbAudio.remember = false                           // routes it sets are not the user's settings
         for step in script.split(separator: ",") {
             let parts = step.split(separator: ":", maxSplits: 1).map(String.init)
             guard parts.count == 2, let at = Double(parts[0]) else { continue }
