@@ -10,7 +10,7 @@
 //   pads B1-B6           select track 1-6 (TRACK + pad)
 //   pad B7 / B8          RECORD / TAP TEMPO
 //   knobs 1-8            PITCH DECAY COLOR SHAPE / SWEEP CONTOUR DELAY REVERB
-//   faders 1-4           LFO SPEED, VOLUME + DIST, SWING, CHANCE
+//   faders 1-4           LFO SPEED, VOLUME + DIST, SWING, CHANCE (the fader position is the value)
 //   pitch / mod strips   pitch bend and CC 1 on the auto channel
 //
 // DAW mode (Shift + Prog on the MiniLab): the whole front panel, with the pad colours following the Model:Cycles'
@@ -23,16 +23,17 @@
 //   main encoder         LEVEL/DATA, press = LEVEL/DATA press
 //   Shift + encoder press  keys: PANEL (the default) <-> NOTES (play the active track)
 //   knobs 1-8            PITCH DECAY COLOR SHAPE / SWEEP CONTOUR DELAY REVERB, endless
-//   faders 1-4           LFO SPEED, VOLUME + DIST, SWING, CHANCE
+//   faders 1-4           LFO SPEED, VOLUME + DIST, SWING, CHANCE: the fader position is the value
 //   pads A1-A6, A7, A8   the six pads, PLAY, STOP
 //   pads B1-B8           RECORD PATTERN TRACK PAGE / RETRIG LFO-SETUP PAD-MENU PRESET-MENU
 //   PANEL keys           (octave at 0) F3-G#4 = trigs 1-16; C3-E3 = QUANTIZE CLICK TEMPO TEMP-SAVE FUNC;
 //                        A4-C5 = PLAY STOP RECORD TRACK
 //
-// Knobs and faders send absolute values; each change of one becomes one encoder detent on the Model:Cycles. In DAW
-// mode each value a knob, fader or the main encoder moves is one value step on the Model:Cycles, sent as single OS
-// knob events (see step()); turned fast, the MiniLab skips values and the OS speeds up on its own. The
-// app also sets a knob back to 64 when it nears either end, so the knobs never run out.
+// Knobs send absolute values; each change of one becomes one encoder detent on the Model:Cycles. In DAW mode each
+// value a knob or the main encoder moves is one value step on the Model:Cycles, sent as single OS knob events (see
+// step()); turned fast, the MiniLab skips values and the OS speeds up on its own. The app also sets a knob back to
+// 64 when it nears either end, so the knobs never run out. Faders, in both modes, go to the active track as MIDI CC,
+// so the fader position is the value (needs the Model:Cycles' MIDI settings to receive CC, the factory setting).
 import CoreMIDI
 import Foundation
 
@@ -58,6 +59,9 @@ final class MiniLab {
     // DAW mode
     static let dawKnobCC: [UInt8] = [86, 87, 89, 90, 110, 111, 116, 117]         // knobs 1-8 -> encoders 2-9
     static let dawFaderCC: [UInt8: Int] = [14: 10, 15: 11, 30: 12, 31: 13]
+    // Faders set their parameter outright, as MIDI CC on the auto channel (the OS's parameter descriptors at
+    // 0x4010e1b0..: LFO SPEED 102, VOLUME + DIST 7, SWING 15 (0-30), CHANCE 14 (0-100)): encoder -> CC
+    static let faderParamCC: [Int: UInt8] = [10: 102, 11: 7, 12: 15, 13: 14]
     static let encoderNames = ["", "LEVEL", "PITCH", "DECAY", "COLOR", "SHAPE", "SWEEP", "CONTOUR", "DELAY",
                                "REVERB", "LFO SPEED", "VOL+DIST", "SWING", "CHANCE"]
     static let bankAKeys = [6: 7, 7: 5]                                           // pads A7 / A8 (0-based): PLAY, STOP
@@ -205,7 +209,9 @@ final class MiniLab {
         case 0xE0:                                               // pitch bend: the active track
             notes.send([kind | MiniLab.autoChannel] + m.dropFirst())
         case 0xB0:
-            if !daw, let enc = MiniLab.knobCC[d1] {
+            if !daw, let enc = MiniLab.knobCC[d1], MiniLab.faderParamCC[enc] != nil {
+                fader(enc, d2)
+            } else if !daw, let enc = MiniLab.knobCC[d1] {
                 let v = Int(d2)
                 if let last = lastCC[d1], v != last { panel.turn(enc, v - last) }
                 lastCC[d1] = v
@@ -303,8 +309,8 @@ final class MiniLab {
             return true
         }
         if let enc = MiniLab.dawFaderCC[cc] {
-            if let last = lastCC[cc], v != last { step(enc, v - last); showParameter(cc, enc) }
-            lastCC[cc] = v
+            fader(enc, UInt8(v))
+            showParameter(cc, enc)
             return true
         }
         switch cc {
@@ -321,6 +327,8 @@ final class MiniLab {
     }
 
     private var currentBankB = false
+    private var faderShown: [Int: TimeInterval] = [:]        // encoder -> when a knob event last showed its value
+    private var faderMoved: [Int: TimeInterval] = [:]        // encoder -> time of its fader's last move
     private var lastStep: [Int: TimeInterval] = [:]          // encoder -> time of its last step
     private var waking: [Int: TimeInterval] = [:]            // encoder -> end of its wake-up wait
     private var deferred: [Int: Int] = [:]                   // steps held for the end of that wait
@@ -373,6 +381,23 @@ final class MiniLab {
             self.lock.lock()
             if let n = self.deferred.removeValue(forKey: enc), n != 0 { self.panel.nudge(enc, n) }
             self.waking[enc] = nil
+            self.lock.unlock()
+        }
+    }
+
+    /// Fader for encoder `enc` at `v`: its parameter on the active track as MIDI CC. A value set by CC shows nothing
+    /// on the screen, so the app also sends a lone knob event, at most every 0.6 s: after a pause the OS only shows
+    /// the value for it, without changing it. In case one does count, the value goes again 0.1 s after the last move.
+    private func fader(_ enc: Int, _ v: UInt8) {
+        guard let param = MiniLab.faderParamCC[enc] else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - (faderShown[enc] ?? 0) >= 0.6 { panel.nudge(enc, 1); faderShown[enc] = now }
+        notes.send([0xB0 | MiniLab.autoChannel, param, v])
+        faderMoved[enc] = now
+        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            if self.faderMoved[enc] == now { self.notes.send([0xB0 | MiniLab.autoChannel, param, v]) }
             self.lock.unlock()
         }
     }
