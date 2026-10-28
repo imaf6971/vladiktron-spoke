@@ -15,6 +15,8 @@ typedef struct mcboard mcboard;
 
 // main_os: decompressed section 3 of the user's .syx. flash_path: 2 MB SPI-flash image (created with the
 // firmware container at 0x20000). emmc_path: eMMC disk image (created sparse if missing).
+// One board per process at a time (the MMIO callbacks and the hang log keep global state): destroy one before
+// creating the next.
 mcboard *mcb_create(const uint8_t *main_os, size_t len, const char *flash_path, const char *emmc_path,
                     char *err, size_t errlen);
 void mcb_destroy(mcboard *b);

@@ -473,6 +473,7 @@ static int emmc_command(mcboard *b, int idx, uint32_t arg, int data, uint32_t rs
 static void emmc_read(mcboard *b, int idx, uint32_t arg, uint8_t *out, size_t n) {
     emmc *c = &b->card;
     uint8_t *tmp = calloc(1, n + 4);
+    if (!tmp) { emmc_error(b, "out of memory", idx, arg); memset(out, 0, n); return; }
     if (idx == 8) {
         memcpy(tmp, c->ext, n < 512 ? n : 512);
     } else if ((idx == 17 || idx == 18) && emmc_in_range(b, idx, arg, n)) {
@@ -497,6 +498,7 @@ static void emmc_write(mcboard *b, int idx, uint32_t arg, const uint8_t *in, siz
     }
     if ((idx == 24 || idx == 25) && emmc_in_range(b, idx, arg, n)) {
         uint8_t *tmp = malloc(n);
+        if (!tmp) { emmc_error(b, "out of memory", idx, arg); return; }
         swap32_copy(tmp, in, n);
         fseeko(c->f, (off_t)arg * 512, SEEK_SET);
         if (fwrite(tmp, 1, n, c->f) != n) { emmc_error(b, "image write failed", idx, arg); clearerr(c->f); }
@@ -588,9 +590,8 @@ static void sd_command(mcboard *b, uint32_t x) {
         if (b->dma59_enabled) {
             uint32_t daddr = io_get(b, TCD59 + 0x10, 4);
             uint8_t *buf = malloc(n);
-            emmc_read(b, idx, arg, buf, n);
-            uc_mem_write(b->uc, daddr, buf, n);
-            free(buf);
+            if (buf) { emmc_read(b, idx, arg, buf, n); uc_mem_write(b->uc, daddr, buf, n); free(buf); }
+            else emmc_error(b, "out of memory", idx, arg);
             dma59_finish(b);
         } else {
             uint8_t buf[512];
@@ -605,9 +606,8 @@ static void sd_command(mcboard *b, uint32_t x) {
         if (b->dma59_enabled) {
             uint32_t saddr = io_get(b, TCD59 + 0x00, 4);
             uint8_t *buf = malloc(n);
-            uc_mem_read(b->uc, saddr, buf, n);
-            emmc_write(b, idx, arg, buf, n);
-            free(buf);
+            if (buf) { uc_mem_read(b->uc, saddr, buf, n); emmc_write(b, idx, arg, buf, n); free(buf); }
+            else emmc_error(b, "out of memory", idx, arg);
             dma59_finish(b);
             irq |= 2;
         } else {
@@ -1463,15 +1463,22 @@ static void midi_rx_service(mcboard *b, double t) {
 mcboard *mcb_create(const uint8_t *os, size_t len, const char *flash_path, const char *emmc_path, char *err,
                     size_t errlen) {
     mcboard *b = calloc(1, sizeof *b);
+    if (!b) { snprintf(err, errlen, "out of memory"); return NULL; }
     pthread_mutex_init(&b->lock, NULL);
     b->ddr = calloc(1, DDR_SIZE);
     b->sram = calloc(1, 0x10000);
     b->scratch = calloc(1, 0x10000);
     b->io_ec = calloc(1, 0x1000000);
     b->io_fc = calloc(1, 0x1000000);
+    b->afifo = calloc(2 * AFIFO, sizeof(float));
+    b->usb.cap = calloc(2 * AFIFO, sizeof(float));
+    b->usb.play = calloc(2 * AFIFO, sizeof(float));
+    if (!b->ddr || !b->sram || !b->scratch || !b->io_ec || !b->io_fc || !b->afifo || !b->usb.cap || !b->usb.play) {
+        snprintf(err, errlen, "out of memory (the board needs about 160 MB)");
+        goto fail;
+    }
     b->imr[0] = b->imr[1] = b->imr[2] = ~0ull;
     for (int n = 0; n < 3; n++) { io_set(b, 0xFC048008u + 0x4000u * n, 4, ~0u); io_set(b, 0xFC04800Cu + 0x4000u * n, 4, ~0u); }
-    b->afifo = calloc(2 * AFIFO, sizeof(float));
     if (len + (OS_BASE - 0x40000000u) > DDR_SIZE) { snprintf(err, errlen, "MAIN OS too large"); goto fail; }
     memcpy(b->ddr + (OS_BASE - 0x40000000u), os, len);
 
@@ -1489,9 +1496,10 @@ mcboard *mcb_create(const uint8_t *os, size_t len, const char *flash_path, const
     }
     b->flash.size = MCB_FLASH_SIZE;
     b->flash.mem = malloc(b->flash.size);
+    b->flash.path = strdup(flash_path);
+    if (!b->flash.mem || !b->flash.path) { fclose(f); snprintf(err, errlen, "out of memory"); goto fail; }
     if (fread(b->flash.mem, 1, b->flash.size, f) != b->flash.size) { fclose(f); snprintf(err, errlen, "short flash read"); goto fail; }
     fclose(f);
-    b->flash.path = strdup(flash_path);
     b->flash.cmd = -1;
     if (emmc_open(&b->card, emmc_path, err, errlen)) goto fail;
     format_ekfs_if_blank(b);
@@ -1522,8 +1530,6 @@ mcboard *mcb_create(const uint8_t *os, size_t len, const char *flash_path, const
     uc_reg_write(b->uc, UC_M68K_REG_A7, &sp);
     uc_reg_write(b->uc, UC_M68K_REG_PC, &pc);
     b->usb.connect = getenv("MCB_NOUSB") == NULL;          // the cable is in unless told otherwise
-    b->usb.cap = calloc(2 * AFIFO, sizeof(float));
-    b->usb.play = calloc(2 * AFIFO, sizeof(float));
     b->t0 = now_us();
     return b;
 fail:
@@ -1659,7 +1665,10 @@ int mcb_run(mcboard *b, double seconds) {
     double end = seconds > 0 ? now_us() + seconds * 1e6 : 0;
     if (atomic_load(&b->powered_off)) return 0;              // powered off: nothing runs any more
     atomic_store(&b->stop, 0);
-    pthread_create(&b->watchdog, NULL, watchdog_main, b);
+    if (pthread_create(&b->watchdog, NULL, watchdog_main, b) != 0) {   // without it, slices never end
+        snprintf(b->fault, sizeof b->fault, "could not start the watchdog thread");
+        return 1;
+    }
     uint32_t pc;
     uc_reg_read(b->uc, UC_M68K_REG_PC, &pc);
     int ret = 0;
