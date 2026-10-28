@@ -495,16 +495,24 @@ extension Notification.Name { static let knobScroll = Notification.Name("knobScr
 // MARK: - Keyboard and scroll wheel
 
 /// Shift = FUNC, Space = PLAY, Return = LEVEL/DATA press; the scroll wheel turns the knob under the pointer.
+/// Dialogs, sheets and text fields keep their keys (a key already held is still let go), and leaving the app lets go
+/// of all three: their key-up would go to another app.
 struct KeyboardMonitor: NSViewRepresentable {
     let board: Board
     @Binding var hoveredKnob: Int?
 
     final class Coordinator {
         var monitors: [Any] = []
+        var resign: NSObjectProtocol?
         var shift = false
         var space = false
         var ret = false
         var scrollResidue: CGFloat = 0
+    }
+
+    /// The key is for an alert, the Open panel, a sheet or a text field, not for the panel.
+    private static func forDialog(_ e: NSEvent) -> Bool {
+        NSApp.modalWindow != nil || e.window?.attachedSheet != nil || NSApp.keyWindow?.firstResponder is NSText
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -515,23 +523,29 @@ struct KeyboardMonitor: NSViewRepresentable {
         let hovered = $hoveredKnob
         c.monitors.append(NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { e in
             let s = e.modifierFlags.contains(.shift)
-            if s != c.shift { c.shift = s; board.key(Panel.function, down: s) }
+            if s != c.shift && !(s && Self.forDialog(e)) { c.shift = s; board.key(Panel.function, down: s) }
             return e
         } as Any)
         c.monitors.append(NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { e in
             let down = e.type == .keyDown
             switch e.keyCode {
             case 49:                                                   // space
+                if Self.forDialog(e) && !c.space { return e }
                 if down != c.space { c.space = down; board.key(Panel.play, down: down) }
             case 36, 76:                                               // Return, keypad Enter: LEVEL/DATA press
-                // leave Return to dialogs and sheets (their default buttons)
-                guard NSApp.modalWindow == nil, e.window?.attachedSheet == nil else { return e }
+                if Self.forDialog(e) && !c.ret { return e }                 // (the dialog's default button)
                 if down != c.ret { c.ret = down; board.key(Panel.dataPush, down: down) }
             default:
                 return e
             }
             return nil
         } as Any)
+        c.resign = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification,
+                                                          object: nil, queue: .main) { _ in
+            if c.shift { c.shift = false; board.key(Panel.function, down: false) }
+            if c.space { c.space = false; board.key(Panel.play, down: false) }
+            if c.ret { c.ret = false; board.key(Panel.dataPush, down: false) }
+        }
         c.monitors.append(NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { e in
             guard let knob = hovered.wrappedValue else { return e }
             c.scrollResidue += e.scrollingDeltaY * (e.hasPreciseScrollingDeltas ? 0.15 : 1)
@@ -549,5 +563,6 @@ struct KeyboardMonitor: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
         coordinator.monitors.forEach { NSEvent.removeMonitor($0) }
+        if let resign = coordinator.resign { NotificationCenter.default.removeObserver(resign) }
     }
 }
