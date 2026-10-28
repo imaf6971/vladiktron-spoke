@@ -156,8 +156,6 @@ window hidden, with no underruns. What remains:
   the battery sense (port A bit 3) reads "on mains". Battery level (Config → Battery, ADC at 0x422ff164),
   auto-off and headphone detect are not modelled. On battery with a low reading, the OS takes its low-battery
   shutdown (state 10 from 0x400530ca, the ShutdownNotificationWindow at 0x4003ea34).
-- **DMA timer prescaler.** `dtim_program` ignores DTMR's clock select. DMA timer 3 (the BatteryHandler tick, set up
-  at 0x4003eb26 with internal clock / 16) therefore fires every 2 ms instead of every 33 ms.
 - **Untouched peripherals.** Anything the OS touches that the board does not model only reads back what was last
   written. A full run of every menu page, with `on_unmapped` faults logged, should show nothing new.
 - **USB edge cases.** USB is modelled for the high-speed device path only. Suspend/resume, stalls and halts, and
@@ -171,7 +169,12 @@ window hidden, with no underruns. What remains:
   saving, reloading and deleting projects through the project menu, and checking that each survives a reboot.
 - **Test images.** `mcmidi_test` and `mcaudio_test` assume the OS is ready 6 s after boot. On an image left by a hard
   stop, the next boot takes longer, so give them a fresh or cleanly shut down image.
-- **Factory content.** Check presets and demo projects on a fresh +Drive against a real unit.
+- **Factory content.** The FACTORY preset folders are empty. On every mount the OS (0x400a7964) recreates
+  `/factory/<BD..TO>` and writes 512 `.mc-snd` files from a block at eMMC block 0x180000 ("MaGj", version 3, type
+  0x15, CRC-checked), which only Elektron's factory writes; neither OS 1.12 nor 1.13 carries it. Options: test
+  Elektron Transfer against the USB-MIDI port, so owners can copy their own presets in (not into `/factory`, which
+  the OS rebuilds), or ship a starter pack of freely licensed presets. Also check the demo projects on a fresh
+  +Drive against a real unit.
 - **CHANGELOG.** The project is in git now (repository root); a CHANGELOG is still to be written.
 - **Clean `build/`.** Remove the leftover debug binaries and the 1.9 GB `emmc_test.img`. Keep test images in a temp
   folder.

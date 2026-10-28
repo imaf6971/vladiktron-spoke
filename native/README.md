@@ -30,9 +30,15 @@ over, unless the new folder already exists.
 working state (the active project) to the +Drive and powers off, which takes about two seconds. Only then does the
 app close the images. (If the OS has not powered off after 5 s, the CPU is stopped anyway.)
 
-**Model:Cycles → Reset +Drive…** starts again with an empty +Drive, which the OS formats with its factory content
+**Model:Cycles → Reset +Drive…** starts again with an empty +Drive, which the OS sets up at the next boot
 (settings stay). **Factory reset…** does that and also puts back the factory flash image (settings). Both ask
 first, and shut the OS down cleanly before they change any files.
+
+**Presets** (FUNC + PRESET MENU) live in a file system on the +Drive that a real unit has formatted at the factory.
+When the +Drive has none yet (a new image, or one made by an earlier version of this app), the board has the OS
+format it at boot; projects already on the +Drive are kept. The **FACTORY** folder's categories (BD, CP, …, TO) stay
+empty: the OS fills them from a block of preset data written to the +Drive at Elektron's factory, which is in no OS
+update (checked in 1.12 and 1.13), so there is nothing to fill them from. Your own presets save and load normally.
 
 ## Pieces
 
