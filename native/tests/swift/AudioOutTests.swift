@@ -27,6 +27,17 @@ final class AudioOutTests: XCTestCase {
         XCTAssertTrue(out.engine.isRunning, "the output stays stopped after a configuration change")
     }
 
+    /// Stopping and starting an engine waits for the hardware (seconds, when a device is switching): never on the main
+    /// thread, which would freeze the window.
+    func testRestartIsOffTheMainThread() throws {
+        let out = try started()
+        defer { out.stop() }
+        out.engine.stop()
+        NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: out.engine)
+        wait { out.restartedOnMain != nil }
+        XCTAssertEqual(out.restartedOnMain, false, "the restart ran on the main thread")
+    }
+
     func testStoppedOutputStaysStopped() throws {
         let out = try started()
         out.stop()

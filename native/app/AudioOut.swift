@@ -2,7 +2,9 @@
 // on the default output device or a chosen one. The board paces its audio by the host clock, so its FIFO fills
 // at the rate the device drains it; we keep a small cushion in front of the device and resync when the two
 // drift apart. When the output hardware changes (headphones in, another default output, a new sample rate) the
-// system stops the engine; it then starts again on the device as it is now.
+// system stops the engine; it then starts again on the device as it is now. The engine is only ever stopped and
+// started on `queue`: both wait for the hardware, for seconds while a device switches, and on the main thread that
+// froze the window.
 import AVFoundation
 import CoreAudio
 
@@ -13,6 +15,10 @@ final class AudioOut {
     private var device: AudioDeviceID?                  // nil: the system's default output, followed when it changes
     private var observer: NSObjectProtocol?             // AVAudioEngineConfigurationChange
     private var defaultListener: AudioObjectPropertyListenerBlock?
+    private var bound: AudioDeviceID?                   // the device the engine plays on now
+    private(set) var restartedOnMain: Bool?             // (for the tests: where the last restart ran)
+    private let queue = DispatchQueue(label: "Vladiktron Spoke audio output", qos: .userInitiated)
+    private let onQueueKey = DispatchSpecificKey<Bool>()
     private let name: String
     private let read: (UnsafeMutablePointer<Float>, Int) -> Int
     private let available: () -> Int
@@ -30,11 +36,19 @@ final class AudioOut {
         self.name = name
         self.read = read
         self.available = available
+        queue.setSpecific(key: onQueueKey, value: true)
+    }
+
+    /// Runs `work` on `queue` and waits for it (at once if already there: deinit can run on it).
+    private func onQueue<T>(_ work: () -> T) -> T {
+        DispatchQueue.getSpecific(key: onQueueKey) == true ? work() : queue.sync(execute: work)
     }
 
     /// Starts on `device` (nil: the system's default output). Returns false if the device would not start.
     @discardableResult
-    func start(device: AudioDeviceID? = nil) -> Bool {
+    func start(device: AudioDeviceID? = nil) -> Bool { onQueue { startHere(device: device) } }
+
+    private func startHere(device: AudioDeviceID?) -> Bool {
         let read = self.read, available = self.available, name = self.name
         let tmp = UnsafeMutablePointer<Float>.allocate(capacity: 2 * 8192)
         self.tmp = tmp
@@ -71,16 +85,20 @@ final class AudioOut {
         source = node
         self.device = device
         engine.attach(node)
+        let notifications = OperationQueue()
+        notifications.underlyingQueue = queue
         observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine,
-                                                          queue: .main) { [weak self] _ in
-            self?.restart(because: "the output hardware changed")
+                                                          queue: notifications) { [weak self] _ in
+            guard let self, !self.engine.isRunning else { return }   // (already started again)
+            self.restart(because: "the output hardware changed")
         }
         if device == nil {
             let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-                self?.restart(because: "the default output changed")
+                guard let self, AudioOut.defaultOutput() != self.bound else { return }
+                self.restart(because: "the default output changed")
             }
             AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &AudioOut.defaultOutputAddress,
-                                                .main, block)
+                                                queue, block)
             defaultListener = block
         }
         return run()
@@ -90,7 +108,9 @@ final class AudioOut {
     private func run() -> Bool {
         guard let node = source else { return false }
         do {
-            if let id = device ?? AudioOut.defaultOutput() { try engine.outputNode.auAudioUnit.setDeviceID(id) }
+            let id = device ?? AudioOut.defaultOutput()
+            if let id { try engine.outputNode.auAudioUnit.setDeviceID(id) }
+            bound = id
             engine.disconnectNodeOutput(node)
             engine.connect(node, to: engine.mainMixerNode, format: AudioOut.format)
             try engine.start()
@@ -105,11 +125,15 @@ final class AudioOut {
     /// that is still settling may refuse for a moment, so this tries for about two seconds.
     private func restart(because reason: String, tries: Int = 5) {
         guard source != nil else { return }             // stopped for good
-        NSLog("Spoke %@: %@; restarting the output", name, reason)
+        restartedOnMain = Thread.isMainThread
+        let t0 = Date()
         engine.stop()
-        if run() { return }
+        let ok = run()
+        NSLog("Spoke %@: %@; output %@ in %.0f ms", name, reason, ok ? "restarted" : "did not start",
+              Date().timeIntervalSince(t0) * 1000)
+        if ok { return }
         guard tries > 1 else { NSLog("Spoke %@: the output would not start again", name); return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.restart(because: reason, tries: tries - 1)
         }
     }
@@ -121,12 +145,14 @@ final class AudioOut {
         return id
     }
 
-    func stop() {
+    func stop() { onQueue { stopHere() } }
+
+    private func stopHere() {
         if let observer { NotificationCenter.default.removeObserver(observer) }
         observer = nil
         if let block = defaultListener {
             AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &AudioOut.defaultOutputAddress,
-                                                   .main, block)
+                                                   queue, block)
         }
         defaultListener = nil
         engine.stop()
