@@ -1,12 +1,13 @@
 // Headless real-time check of the main output, with the board on its own thread as in the app: a pattern plays
 // while a reader takes mcb_audio every millisecond: with USB audio off, then with both USB streams on, then off
-// again. (It also prints the process's CPU use per phase.)
+// again. (It also prints, per phase, what the process cost: CPU %, energy, host cycles, wakeups.)
 // Each phase fails if the output runs below 48 kHz, if a block arrives late (more than LATE_MS behind the
 // steadiest arrival line), or if a block comes out repeated: a sounding 32-frame block identical to the one
 // before, or to the one two before (the same half of the OS's audio ring, played again because the OS had not
 // rendered it yet).
 //   mcrt_test <main_os.bin> <flash.bin> <emmc.img> [seconds per phase]
 // Prints PASS/FAIL per check; exit status 0 only if all pass. Run it on an otherwise idle machine.
+#include <libproc.h>
 #include <math.h>
 #include <pthread.h>
 #include <pthread/qos.h>
@@ -23,6 +24,23 @@
 static int failures;
 
 static double cpu_s(void) { struct rusage u; getrusage(RUSAGE_SELF, &u); return u.ru_utime.tv_sec + u.ru_stime.tv_sec + (u.ru_utime.tv_usec + u.ru_stime.tv_usec) * 1e-6; }
+// What the process cost the Mac, from the kernel's own counters (no sudo): energy, host CPU cycles (steadier than
+// CPU %, which swings by several points between identical runs), wakeups and context switches.
+typedef struct { double energy_j, gcycles, pkg_idle_wkups, intr_wkups, csw; } cost;
+static cost cost_now(void) {
+    struct rusage_info_v6 ri;
+    struct rusage u;
+    cost c = {0};
+    if (proc_pid_rusage(getpid(), RUSAGE_INFO_V6, (rusage_info_t *)&ri) == 0) {
+        c.energy_j = ri.ri_energy_nj * 1e-9;
+        c.gcycles = ri.ri_cycles * 1e-9;
+        c.pkg_idle_wkups = (double)ri.ri_pkg_idle_wkups;
+        c.intr_wkups = (double)ri.ri_interrupt_wkups;
+    }
+    getrusage(RUSAGE_SELF, &u);
+    c.csw = (double)(u.ru_nvcsw + u.ru_nivcsw);
+    return c;
+}
 static double now(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec + ts.tv_nsec * 1e-9; }
 static void *cpu(void *b) {                                  // the app's CPU thread runs at this QoS too, which
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);   // keeps it on the performance cores
@@ -42,6 +60,7 @@ static void phase(mcboard *b, double secs, int usb, const char *name) {
     int have_prev = 0;
     while (mcb_audio(b, buf, 4096)) {}                       // start from an empty FIFO
     double c0 = cpu_s(), w0 = now();
+    cost k0 = cost_now();
     for (double end = now() + secs; now() < end; ) {
         usleep(1000);
         double t = now();
@@ -63,7 +82,8 @@ static void phase(mcboard *b, double secs, int usb, const char *name) {
         }
         while (usb && mcb_usb_audio_write_queued(b) < 960) mcb_usb_audio_write(b, zero, 48);
     }
-    double cpu = (cpu_s() - c0) / (now() - w0) * 100;
+    double wall = now() - w0, cpu = (cpu_s() - c0) / wall * 100;
+    cost k1 = cost_now();
     double span = arrive[blocks - 1] - first;
     double rate = blocks > 1 ? (blocks - 1) * 32 / span : 0;
     for (size_t i = 0; i < blocks && i < (size_t)(secs * 1500 + 4096); i++) {
@@ -74,6 +94,9 @@ static void phase(mcboard *b, double secs, int usb, const char *name) {
     char st[700], what[160];
     printf("      %s: %zu blocks, %.1f Hz, latest block %.2f ms behind, %zu late, %zu repeated; CPU %.0f %%\n", name,
            blocks, rate, worst, late, repeats, cpu);
+    printf("      %s: %.0f mW, %.3f G cycles/s, %.0f context switches/s, %.0f interrupt wakeups/s, %.0f idle wakeups/s\n",
+           name, (k1.energy_j - k0.energy_j) / wall * 1000, (k1.gcycles - k0.gcycles) / wall, (k1.csw - k0.csw) / wall,
+           (k1.intr_wkups - k0.intr_wkups) / wall, (k1.pkg_idle_wkups - k0.pkg_idle_wkups) / wall);
     snprintf(what, sizeof what, "%s: main output at 48 kHz", name);
     check(rate >= MIN_RATE, what);
     snprintf(what, sizeof what, "%s: no block more than %.0f ms late", name, LATE_MS);
