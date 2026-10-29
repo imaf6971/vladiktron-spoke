@@ -71,14 +71,13 @@ final class MidiPortPair {
     }
 
     private func emit(_ msg: [UInt8]) {
+        // Always fits: the list has room for the message, and a message is at most MidiStreamParser.sysexChunk bytes
+        // (far below a packet's 64 KB). (Swift sees MIDIPacketListAdd's result as never nil, so it cannot be checked.)
         var storage = [UInt8](repeating: 0, count: 64 + msg.count)
         storage.withUnsafeMutableBytes { raw in
             let list = raw.baseAddress!.assumingMemoryBound(to: MIDIPacketList.self)
             let packet = MIDIPacketListInit(list)
-            guard MIDIPacketListAdd(list, raw.count, packet, mach_absolute_time(), msg.count, msg) != nil else {
-                NSLog("Spoke: %@: a %ld-byte MIDI message did not fit a packet", name, msg.count)
-                return
-            }
+            MIDIPacketListAdd(list, raw.count, packet, mach_absolute_time(), msg.count, msg)
             MIDIReceived(source, list)
         }
     }
