@@ -107,7 +107,9 @@ sample for sample. What remains:
 - **Clock drift.** Audio is paced by the host clock but played by the output device's clock. Today a drift shows up
   as an occasional dropped or repeated buffer. Replace that with gentle resampling (±100 ppm) driven by the fill
   level of the queue.
-- **Level calibration.** Compare levels against a real unit: main volume, the headphone path, and the codec
+- **Level calibration.** MAIN VOLUME works (2026-10-29): the board applies the codec's line-out volume (0x1E/0x1F,
+  read as a DA7210's: -54 dB in 1.5 dB steps, knob down = mute, knob up = the mix at 0 dB). The step size comes
+  from the register layout, not a measurement. Compare levels against a real unit: main volume, the headphone path, and the codec
   registers the OS writes over I2C (`MCB_CODECLOG=1`). Check full scale and clipping.
 - **Audio device choice.** Pick the output device and buffer size in Settings, instead of the system default only.
 - **Latency.** Measure end to end (pad click → sound) and document it. Trim the cushion if the clock work allows.

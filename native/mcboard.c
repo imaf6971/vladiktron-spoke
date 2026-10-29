@@ -143,6 +143,7 @@ struct mcboard {
     double dma50_stamp;                     // scheduled time (us) of the block just started
     uint32_t dma50_base;                    // ring start (SADDR at enable)
     float *afifo;                           // stereo float ring for the app (AFIFO frames)
+    float out_gain[2];                      // main-out gain last applied (L, R): the codec's line-out volume
     atomic_uint_fast64_t afifo_w, afifo_r;
     uint64_t n_blocks;
     // MCB_RTLOG: real-time health, logged each second (rt_log)
@@ -539,6 +540,17 @@ static void dma_lines(mcboard *b) {
     set_line(b, 2, 0, (b->dma_int >> 59) & 1);
 }
 
+// MAIN VOLUME: the OS does not scale the mix, it sets the codec's line-out volume (OUT1_L/R, registers 0x1E/0x1F;
+// the register layout is a Dialog DA7210's). Bit 7 enables the output; bits 5:0 are 0x00-0x10 mute, then -54 dB
+// in 1.5 dB steps. The knob runs 0x10 (down) to 0x36 (up, +1.5 dB): full up plays the mix as sent, at 0 dB here,
+// so it never clips. USB audio is taken before the codec, as on the hardware, and does not follow the knob.
+static float out1_gain(uint8_t r) {
+    int v = r & 0x3F;
+    if (!(r & 0x80) || v <= 0x10) return 0;
+    if (v > 0x36) v = 0x36;
+    return (float)pow(10.0, -1.5 * (0x36 - v) / 20.0);
+}
+
 // One 32-frame boundary of the audio DMA: the half about to play goes to the FIFO, then the half/major
 // interrupt asks the OS (0x400589c0 -> forced render interrupt) to fill the half just played.
 static void dma50_block(mcboard *b) {
@@ -548,12 +560,18 @@ static void dma50_block(mcboard *b) {
     const uint8_t *half = ring + 256 * b->dma50_half;
     uint64_t w = atomic_load(&b->afifo_w);
     if (w - atomic_load(&b->afifo_r) <= AFIFO - 32) {
+        float g0[2] = {b->out_gain[0], b->out_gain[1]};
+        float g1[2] = {out1_gain(b->codec[0x1E]), out1_gain(b->codec[0x1F])};   // a change ramps over the block
         for (int i = 0; i < 32; i++) {
             float *o = b->afifo + 2 * ((w + i) & (AFIFO - 1));
+            float t = (i + 1) / 32.0f;
             o[0] = (float)((int32_t)be32(half + 8 * i) / -8388608.0);      // 24-bit samples, right-justified; the
             o[1] = (float)((int32_t)be32(half + 8 * i + 4) / -8388608.0);  // OS sends the codec the mix inverted
                                                                              // (USB carries it upright): undo that
+            o[0] *= g0[0] + (g1[0] - g0[0]) * t;
+            o[1] *= g0[1] + (g1[1] - g0[1]) * t;
         }
+        b->out_gain[0] = g1[0]; b->out_gain[1] = g1[1];
         atomic_store(&b->afifo_w, w + 32);
     }
     io_set(b, 0xFC045656u, 2, b->dma50_half ? 32 : 64);     // CITER (counts down): playing half 0 -> 64 left

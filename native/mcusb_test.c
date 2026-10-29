@@ -57,6 +57,8 @@ int main(int argc, char **argv) {
     pthread_t t;
     pthread_create(&t, NULL, cpu, b);
     usleep(7000000);                                          // boot and enumerate
+    mcb_encoder(b, 16, 60);                                   // MAIN VOLUME full up: the main out plays the mix
+    usleep(1500000);                                          // as sent (0 dB), so it matches USB capture
 
     // 1. link and USB-MIDI
     check(mcb_usb_state(b) == 2, "USB: enumerated and configured");
