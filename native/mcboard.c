@@ -1775,10 +1775,12 @@ size_t mcb_audio_available(mcboard *b) {
     return (size_t)(atomic_load(&b->afifo_w) - atomic_load(&b->afifo_r));
 }
 
-void mcb_midi_in(mcboard *b, const uint8_t *data, size_t n) {
+size_t mcb_midi_in(mcboard *b, const uint8_t *data, size_t n) {
     uint64_t w = atomic_load(&b->min_w);
-    for (size_t i = 0; i < n && w - atomic_load(&b->min_r) < MIDI_RING; i++, w++) b->midi_in[w & (MIDI_RING - 1)] = data[i];
+    size_t i = 0;
+    for (; i < n && w - atomic_load(&b->min_r) < MIDI_RING; i++, w++) b->midi_in[w & (MIDI_RING - 1)] = data[i];
     atomic_store(&b->min_w, w);
+    return i;
 }
 
 size_t mcb_midi_out(mcboard *b, uint8_t *out, size_t max) {
@@ -1789,9 +1791,11 @@ size_t mcb_midi_out(mcboard *b, uint8_t *out, size_t max) {
     return n;
 }
 
-void mcb_usb_midi_in(mcboard *b, const uint8_t *data, size_t n) {
+size_t mcb_usb_midi_in(mcboard *b, const uint8_t *data, size_t n) {
     static const uint8_t len[8] = {2, 2, 2, 2, 1, 1, 2, 0};  // data bytes for 8x..Ex
     for (size_t i = 0; i < n; i++) {
+        if (atomic_load(&b->usb.ev_w) - atomic_load(&b->usb.ev_r) > 4096 - 2)
+            return i;                                         // a byte makes at most two packets: no room, stop here
         uint8_t c = data[i];
         if (c >= 0xF8) { usb_event(b, 0xF, c, 0, 0); continue; }
         if (c == 0xF0) { b->usb.in_sysex = 1; b->usb.sx[0] = c; b->usb.sx_n = 1; b->usb.ev_status = 0; continue; }
@@ -1823,6 +1827,7 @@ void mcb_usb_midi_in(mcboard *b, const uint8_t *data, size_t n) {
         b->usb.ev_n = 0;
         if (st >= 0xF0) b->usb.ev_status = 0;               // system common: no running status
     }
+    return n;
 }
 
 size_t mcb_usb_midi_out(mcboard *b, uint8_t *out, size_t max) {

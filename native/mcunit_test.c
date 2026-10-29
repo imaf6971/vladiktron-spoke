@@ -125,6 +125,40 @@ static void test_unmapped_access(void) {
     mcb_destroy(b);
 }
 
+// MIDI in, both ports: what does not fit is not taken (the caller keeps it and sends it again), never dropped.
+static void test_midi_in_backpressure(void) {
+    mcboard *b = calloc(1, sizeof *b);
+    static uint8_t in[20000], out[20000];
+    for (size_t i = 0; i < sizeof in; i++) in[i] = (uint8_t)(i & 0x7F);
+    size_t took = mcb_midi_in(b, in, sizeof in);
+    check(took == MIDI_RING, "TRS: a full ring takes no more (4 KB taken of 20 KB)");
+    int same = 1;
+    for (size_t i = 0; i < took; i++) same &= b->midi_in[i & (MIDI_RING - 1)] == in[i];
+    b->min_r += 1000;                                         // the OS read 1000 bytes
+    took = mcb_midi_in(b, in + MIDI_RING, sizeof in - MIDI_RING);
+    check(same && took == 1000, "TRS: the bytes taken are in order, and more go in as the OS reads");
+    free(b);
+
+    b = calloc(1, sizeof *b);                                 // USB: a 20 KB SysEx through 4096 event packets
+    in[0] = 0xF0; in[sizeof in - 1] = 0xF7;
+    size_t off = 0, o = 0, first = 0;
+    for (int round = 0; off < sizeof in && round < 100; round++) {
+        size_t k = mcb_usb_midi_in(b, in + off, sizeof in - off);
+        if (!round) first = k;
+        off += k;
+        for (uint64_t r = b->usb.ev_r; r != b->usb.ev_w; r++) {   // the device takes every packet
+            const uint8_t *e = b->usb.ev + 4 * (r & 4095);
+            int len = e[0] == 4 || e[0] == 7 ? 3 : e[0] == 6 ? 2 : e[0] == 5 ? 1 : 0;
+            for (int j = 0; j < len && o < sizeof out; j++) out[o++] = e[1 + j];
+        }
+        b->usb.ev_r = b->usb.ev_w;
+    }
+    check(first < sizeof in, "USB: a full packet queue takes no more bytes");
+    check(off == sizeof in && o == sizeof in && memcmp(in, out, sizeof in) == 0,
+          "USB: the whole SysEx arrives, in order, once the device takes the packets");
+    free(b);
+}
+
 // mcb_fault says why the CPU stopped, once mcb_run has returned; a healthy board has no fault.
 static void test_fault_report(void) {
     uint8_t os[0x100] = {0};
@@ -173,6 +207,7 @@ int main(void) {
     test_unmapped_access();
     test_usb_play_packet_bound();
     test_fault_report();
+    test_midi_in_backpressure();
     char p[600];
     static const char *names[] = {"flash.bin", "emmc.img", "emmc.img.extcsd"};
     for (int i = 0; i < 3; i++) { path(p, sizeof p, names[i]); unlink(p); }

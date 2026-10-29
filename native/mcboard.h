@@ -72,14 +72,15 @@ size_t mcb_audio(mcboard *b, float *out, size_t frames);
 size_t mcb_audio_available(mcboard *b);
 
 // MIDI (the DIN/TRS ports): bytes in for the OS's MIDI IN, delivered at 31250 baud; bytes the OS sent on
-// MIDI OUT/THRU. One writer and one reader each, thread-safe against the CPU thread.
-void mcb_midi_in(mcboard *b, const uint8_t *data, size_t n);
+// MIDI OUT/THRU. One writer and one reader each, thread-safe against the CPU thread. mcb_midi_in returns how many
+// bytes it took (its 4 KB queue drains at 3 KB/s): send the rest again later.
+size_t mcb_midi_in(mcboard *b, const uint8_t *data, size_t n);
 size_t mcb_midi_out(mcboard *b, uint8_t *out, size_t max);
 
 // USB: the board is plugged into a built-in host (set MCB_NOUSB to leave the cable out), which enumerates the
 // OS's USB device and talks USB-MIDI to it. Raw MIDI bytes in/out, as for the DIN/TRS port above.
 // mcb_usb_state: 0 not connected, 1 enumerating, 2 configured, -1 the device stopped answering.
-void mcb_usb_midi_in(mcboard *b, const uint8_t *data, size_t n);
+size_t mcb_usb_midi_in(mcboard *b, const uint8_t *data, size_t n);       // bytes taken, as mcb_midi_in
 size_t mcb_usb_midi_out(mcboard *b, uint8_t *out, size_t max);
 int mcb_usb_state(mcboard *b);
 
