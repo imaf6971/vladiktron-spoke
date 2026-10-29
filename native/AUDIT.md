@@ -22,7 +22,8 @@ practical. `./build.sh` is clean. `./test.sh` passes: `mcunit_test` with 14 chec
 | R6 keys on deactivate and in dialogs | `d2af5f2` | build only: **click it through** (hold Shift, ⌘-Tab away; type in the Open panel) |
 | U1 alert text | `73dbc2c` | build |
 | D2 test hooks, `test.sh` total | `193bcb4` | scripted run: the route was not saved, and the script ran once across a reset |
-| B1 Unicorn for macOS 14 | (this commit) | no linker warnings; Unicorn objects and the app binary say `minos 14.0`; `test.sh`, `mcusb_test`, `mcshutdown_test` pass. Not run on a real macOS 14 Mac. |
+| B1 Unicorn for macOS 14 | `50c36e3` | no linker warnings; Unicorn objects and the app binary say `minos 14.0`; `test.sh`, `mcusb_test`, `mcshutdown_test` pass. Not run on a real macOS 14 Mac. |
+| R1 audio after an output change | (this commit) | new `AudioOutTests`: stopping the engine and posting `AVAudioEngineConfigurationChange` left it stopped before the fix, and it restarts now; a stopped output stays stopped. **Not yet tried with a real switch** (headphones, Control Center) |
 
 Left from R11: `emmc_save_ext` (not atomic), `MidiStreamParser`'s unbounded SysEx (belongs with R4), and the
 `MiniLab.rescan` thread race. `README.md`'s Pieces table doesn't list `mcunit_test` yet: it had your
@@ -118,7 +119,7 @@ between-slices loop, plus once at `mcb_run` exit and in destroy. That path alrea
 
 ### Reliability and correctness
 
-**R1 — High (if confirmed), S–M. Main audio probably does not recover when the Mac's output route changes.**
+**[done, see Progress] R1 — High (if confirmed), S–M. Main audio probably does not recover when the Mac's output route changes.**
 `AudioOut` (`app/AudioOut.swift:28-73`) starts an `AVAudioEngine` once and never watches
 `AVAudioEngineConfigurationChange` (grep: nothing in `app/` handles it). AVAudioEngine stops itself when its output
 hardware changes format, for example when headphones or an interface are plugged in or the default device changes
