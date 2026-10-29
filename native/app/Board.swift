@@ -7,6 +7,7 @@ final class Board: ObservableObject, @unchecked Sendable {
     @Published var screen: CGImage?
     @Published var leds: UInt64 = 0
     @Published var error: String?
+    @Published var problem: String?                     // the Model:Cycles stopped (Board.problem): the panel says so
     @Published var needsFirmware = false                // no OS installed yet: the panel asks for the .syx
     @Published var usbState: Int32 = 0                  // mcb_usb_state
     @Published var controller: String?                  // connected MIDI controller (MiniLab 3)
@@ -60,6 +61,8 @@ final class Board: ObservableObject, @unchecked Sendable {
         }
         guard let b else {
             error = "Could not start the board: " + String(cString: err)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.snapshotNow() }   // SPOKE_SNAPSHOT
+            runTestScript()
             return
         }
         board = b
@@ -90,7 +93,8 @@ final class Board: ObservableObject, @unchecked Sendable {
 
     // Self-check: SPOKE_TEST="8:play,20:out=BuiltInSpeakerDevice,30:out=,60:quit" runs these steps at the
     // given seconds after launch: press PLAY, route USB audio out/in to a device UID (empty: nowhere), open the
-    // About panel ("about"), Reset +Drive without asking ("reset": use it with SPOKE_DATA), quit.
+    // About panel ("about"), Reset +Drive without asking ("reset": use it with SPOKE_DATA), stop the CPU where it
+    // is, as a fault would ("halt"), press the problem overlay's Restart ("restart"), quit.
     private var testScriptRan = false
     private func runTestScript() {
         guard !testScriptRan, let script = ProcessInfo.processInfo.environment["SPOKE_TEST"] else { return }
@@ -109,6 +113,8 @@ final class Board: ObservableObject, @unchecked Sendable {
                 case "out": self.usbAudio.outputUID = arg
                 case "in": self.usbAudio.inputUID = arg
                 case "about": AppDelegate.showAbout()
+                case "halt": if let b = self.board { mcb_stop(b) }
+                case "restart": self.restartAfterProblem { NSLog("Spoke test: restarted, problem: %@", self.problem ?? "none") }
                 case "reset": self.resetDrive { NSLog("Spoke test: reset: %@", $0.map { "\($0)" } ?? "ok") }
                 case "quit": RunLoop.main.perform { NSApp.terminate(nil) }   // not inside this main-queue
                                                                              // block: the shutdown replies on it
@@ -129,6 +135,7 @@ final class Board: ObservableObject, @unchecked Sendable {
     /// After `timeout` seconds the CPU is stopped wherever it is. Calls `done` on the main thread.
     func shutDown(timeout: TimeInterval = 5, done: @escaping () -> Void) {
         guard let b = board, let t = thread else { done(); return }
+        let timeout = problem != nil ? 0 : timeout          // a stopped OS saves nothing: don't wait for it
         afterShutdown.append(done)
         guard !shuttingDown else { return }                 // one at a time (quit during a reset, say): this
         shuttingDown = true                                 // `done` runs when the one under way ends
@@ -175,9 +182,15 @@ final class Board: ObservableObject, @unchecked Sendable {
             leds = 0
             lastGen = 0
             error = nil
+            problem = nil
             if !quitting { start() }
             done(failure)
         }
+    }
+
+    /// After a problem (or a board that would not start): boot again, changing nothing.
+    func restartAfterProblem(done: @escaping () -> Void = {}) {
+        restart(changing: { _ in }, done: { _ in done() })
     }
 
     /// Reset +Drive: a fresh, empty eMMC image; the OS formats it at boot. Settings (flash.bin) stay.
@@ -292,7 +305,27 @@ final class Board: ObservableObject, @unchecked Sendable {
         if l != leds { leds = l }
         let u = mcb_usb_state(b)
         if u != usbState { usbState = u }
+        if problem == nil && !shuttingDown {
+            let stopped = thread?.isFinished == true            // mcb_run returned by itself: a fault
+            var why = [CChar](repeating: 0, count: 256)
+            if stopped { _ = mcb_fault(b, &why, why.count) }
+            if let p = Board.problem(cpuStopped: stopped, fault: String(cString: why), osExceptions: mcb_os_exceptions(b)) {
+                NSLog("Spoke: %@", p)
+                problem = p
+            }
+        }
         snapshotIfRequested()
+    }
+
+    /// What stopped the Model:Cycles, in words for the panel; nil while it runs. `fault` is mcb_fault's reason.
+    static func problem(cpuStopped: Bool, fault: String, osExceptions: UInt64) -> String? {
+        if osExceptions > 0 {
+            return "The Model:Cycles OS crashed: it showed EXCEPTION on its screen and stopped."
+        }
+        if cpuStopped {
+            return fault.isEmpty ? "The emulator stopped." : "The emulator stopped: \(fault)."
+        }
+        return nil
     }
 
     /// The board's one-line diagnostics (mcb_status), made when asked. Not published: its uptime changes every

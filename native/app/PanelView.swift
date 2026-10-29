@@ -97,6 +97,11 @@ struct PanelView: View {
         .background(Color(red: 0.600, green: 0.604, blue: 0.588))
         .background(KeyboardMonitor(board: board, hoveredKnob: $hoveredKnob))
         .overlay { if board.needsFirmware { FirmwareSetupView(board: board) } }
+        .overlay {
+            if !board.needsFirmware, let message = board.problem ?? board.error {
+                ProblemView(board: board, message: message, started: board.problem != nil)
+            }
+        }
     }
 
     private var panel: some View {
@@ -150,8 +155,6 @@ struct PanelView: View {
                 if let img = board.screen {
                     Image(decorative: img, scale: 1).interpolation(.none).resizable()
                         .padding(EdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6))
-                } else if let e = board.error {
-                    Text(e).font(.system(size: 6)).foregroundStyle(.black).padding(8)
                 }
             }
             .frame(width: 129, height: 73)
@@ -335,6 +338,48 @@ struct PanelView: View {
     private func subLabel(_ t: String, y: CGFloat, x: CGFloat, underline: Bool = false) -> some View {
         Text(t).font(labelFont(8.4)).fontWidth(.condensed).foregroundStyle(Palette.label2).underline(underline)
             .fixedSize().position(x: x, y: y)
+    }
+}
+
+// MARK: - Problems
+
+/// The Model:Cycles stopped (an emulator fault, an OS crash) or would not start: what happened, and a way back.
+struct ProblemView: View {
+    @ObservedObject var board: Board
+    let message: String
+    let started: Bool                                  // it ran and stopped (else: it could not start)
+    @State private var restarting = false
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.35)
+            VStack(alignment: .leading, spacing: 14) {
+                Label(started ? "The Model:Cycles stopped" : "The Model:Cycles could not start",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.title2.weight(.semibold))
+                Text(message).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                Text(started ? "Restart boots it again from the +Drive. Changes the OS had not saved yet are lost."
+                             : "The message says which file and how to fix it; then Try Again.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button("Reveal Data Folder") { NSWorkspace.shared.activateFileViewerSelecting([Board.dataDir]) }
+                    Spacer()
+                    if restarting { ProgressView().controlSize(.small) }
+                    Button(started ? "Restart" : "Try Again") {
+                        restarting = true
+                        board.restartAfterProblem { restarting = false }
+                    }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(restarting)
+                }
+            }
+            .padding(24)
+            .frame(width: 440)
+            .background(RoundedRectangle(cornerRadius: 12).fill(.regularMaterial))
+            .shadow(radius: 20)
+        }
+        .accessibilityElement(children: .contain)
     }
 }
 

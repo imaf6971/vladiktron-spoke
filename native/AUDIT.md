@@ -24,6 +24,7 @@ practical. `./build.sh` is clean. `./test.sh` passes: `mcunit_test` with 14 chec
 | D2 test hooks, `test.sh` total | `193bcb4` | scripted run: the route was not saved, and the script ran once across a reset |
 | B1 Unicorn for macOS 14 | `50c36e3` | no linker warnings; Unicorn objects and the app binary say `minos 14.0`; `test.sh`, `mcusb_test`, `mcshutdown_test` pass. Not run on a real macOS 14 Mac. |
 | R1 audio after an output change | `91ea0f6`, `6ab9722` | new `AudioOutTests`: stopping the engine and posting `AVAudioEngineConfigurationChange` left it stopped before the fix, and it restarts now, off the main thread (it ran on it at first and froze the window for seconds); a stopped output stays stopped. Tried by hand: the sound follows a headphone plug and unplug. Unplug → Speakers takes ~50 ms. Plug-in → External Headphones takes 1.6–2.1 s, all inside `engine.start()` while macOS readies the new jack device; the same start takes 3–6 ms once it has settled, so that wait is the hardware, not the app |
+| R3 fault overlay with Restart | (these commits) | `mcunit_test`: `mcb_fault` reports an unmapped access after `mcb_run` returns; `BoardProblemTests` (4). Scripted runs with snapshots: `SPOKE_TEST="6:halt,14:restart,26:quit"` showed "The Model:Cycles stopped", Restart booted it again and the quit was a clean power-off; a 1-byte flash.bin showed "could not start" with the board's message. Not covered: an OS that hangs without an exception |
 
 Left from R11: `emmc_save_ext` (not atomic), `MidiStreamParser`'s unbounded SysEx (belongs with R4), and the
 `MiniLab.rescan` thread race. `README.md`'s Pieces table doesn't list `mcunit_test` yet: it had your
@@ -137,7 +138,7 @@ app is left in AppKit's "terminating" state with the quit never answered. *Windo
 *Confidence:* high (from reading the code). *Fix:* collect the `done` callbacks while a shutdown runs and call them
 all, and let a pending quit stop the reset's reboot.
 
-**R3 — Medium, M. An emulator fault is invisible, and there's no way to recover.** When Unicorn stops
+**[done, see Progress] R3 — Medium, M. An emulator fault is invisible, and there's no way to recover.** When Unicorn stops
 (`mcboard.c:1664-1668`), `mcb_run` returns 1 and the CPU thread ends. The app keeps `board` non-nil and the screen
 freezes. The fault text exists only inside the `status` string, which nothing shows (see P1). `Board.error` is shown
 only when there is no screen image, in 6 pt type (`PanelView.swift:150-155`). The OS's own exception handler
@@ -250,7 +251,7 @@ Factory reset file swap.
 - **[done 73dbc2c] U1 — Low, S. The reset alerts promise factory content that won't appear.** They say the OS "formats [the
   +Drive] with its factory content" (`SpokeApp.swift:108, 123`). Your uncommitted README edit now says the FACTORY
   folders stay empty.
-- **U2 — Medium, S. Several failures say nothing.** Microphone access denied (`UsbAudio.swift:126-131`) does
+- **[partly done: a board that won't start now shows an overlay] U2 — Medium, S. Several failures say nothing.** Microphone access denied (`UsbAudio.swift:126-131`) does
   nothing visible. A main output that fails to start only logs (`AudioOut.swift:70`; `Board.start` ignores the
   result). An emulator fault: see R3.
 - **U3 — Low, M. Accessibility.** No accessibility labels on keys, knobs or pads, and knobs can't be adjusted from
