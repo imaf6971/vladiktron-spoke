@@ -3,6 +3,30 @@ import AppKit
 import MCBoard
 import SwiftUI
 
+/// The C board for calls that may come after it is gone: MIDI callbacks and MiniLab timers (a pad tap's release fires
+/// 110 ms later). `with` runs only while the board exists; `close` (Board.stop, before mcb_destroy) waits for a call
+/// in progress and turns later ones into nothing. The audio render blocks keep the plain pointer: their engines stop
+/// before the board goes, and a lock has no place on the audio thread.
+final class BoardHandle: @unchecked Sendable {
+    private var board: OpaquePointer?
+    private let lock = NSLock()
+
+    init(_ board: OpaquePointer) { self.board = board }
+
+    @discardableResult
+    func with<T>(_ body: (OpaquePointer) -> T) -> T? {
+        lock.lock(); defer { lock.unlock() }
+        return board.map(body)
+    }
+
+    /// The board, once; nil if already closed.
+    func close() -> OpaquePointer? {
+        lock.lock(); defer { lock.unlock() }
+        defer { board = nil }
+        return board
+    }
+}
+
 final class Board: ObservableObject, @unchecked Sendable {
     @Published var screen: CGImage?
     @Published var leds: UInt64 = 0
@@ -13,6 +37,7 @@ final class Board: ObservableObject, @unchecked Sendable {
     @Published var controller: String?                  // connected MIDI controller (MiniLab 3)
 
     private var board: OpaquePointer?
+    private var handle: BoardHandle?                    // the board for MIDI and MiniLab calls (closed before destroy)
     private var thread: Thread?
     private var activity: NSObjectProtocol?             // keeps App Nap away while the board runs
     private var timer: Timer?
@@ -79,12 +104,14 @@ final class Board: ObservableObject, @unchecked Sendable {
         main.start()
         audio = main
         usbAudio.start(board: b)
-        let panel = MiniLab.Panel(key: { mcb_key(b, Int32($0), $1 ? 1 : 0) },
-                                  turn: { mcb_encoder(b, Int32($0), Int32($1)) },
-                                  nudge: { mcb_encoder_events(b, Int32($0), Int32($1)) },
-                                  pad: { mcb_pad(b, Int32($0), $1) },
-                                  leds: { mcb_leds(b) })
-        midi.start(board: b, panel: panel) { [weak self] name in DispatchQueue.main.async { self?.controller = name } }
+        let h = BoardHandle(b)                              // MiniLab timers may fire after the board is gone
+        handle = h
+        let panel = MiniLab.Panel(key: { k, down in h.with { mcb_key($0, Int32(k), down ? 1 : 0) } },
+                                  turn: { e, n in h.with { mcb_encoder($0, Int32(e), Int32(n)) } },
+                                  nudge: { e, n in h.with { mcb_encoder_events($0, Int32(e), Int32(n)) } },
+                                  pad: { p, v in h.with { mcb_pad($0, Int32(p), v) } },
+                                  leds: { h.with { mcb_leds($0) } ?? 0 })
+        midi.start(board: h, panel: panel) { [weak self] name in DispatchQueue.main.async { self?.controller = name } }
         let t2 = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.refresh() }
         RunLoop.main.add(t2, forMode: .common)              // also while quitting waits (modal run loop mode)
         timer = t2
@@ -163,6 +190,8 @@ final class Board: ObservableObject, @unchecked Sendable {
         audio = nil
         usbAudio.stop()
         midi.stop()
+        _ = handle?.close()                                 // MIDI and MiniLab calls from now on do nothing
+        handle = nil
         mcb_stop(b)
         while thread?.isFinished == false { usleep(1000) }
         thread = nil

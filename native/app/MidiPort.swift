@@ -67,11 +67,11 @@ final class MidiPort {
     private let queue = DispatchQueue(label: "Vladiktron Spoke MIDI out", qos: .userInteractive)
     private(set) var controller: MiniLab?
 
-    func start(board b: OpaquePointer, panel: MiniLab.Panel, onControllerChange: @escaping (String?) -> Void) {
-        let usb = MidiPortPair(name: "Model:Cycles", inject: { mcb_usb_midi_in(b, $0, $1) },
-                               drain: { mcb_usb_midi_out(b, $0, $1) })
-        let trs = MidiPortPair(name: "Model:Cycles TRS", inject: { mcb_midi_in(b, $0, $1) },
-                               drain: { mcb_midi_out(b, $0, $1) })
+    func start(board h: BoardHandle, panel: MiniLab.Panel, onControllerChange: @escaping (String?) -> Void) {
+        let usb = MidiPortPair(name: "Model:Cycles", inject: { p, n in h.with { mcb_usb_midi_in($0, p, n) } },
+                               drain: { p, n in h.with { mcb_usb_midi_out($0, p, n) } ?? 0 })
+        let trs = MidiPortPair(name: "Model:Cycles TRS", inject: { p, n in h.with { mcb_midi_in($0, p, n) } },
+                               drain: { p, n in h.with { mcb_midi_out($0, p, n) } ?? 0 })
         pairs = [usb, trs]
         let lab = MiniLab(panel: panel, notes: trs, onChange: onControllerChange)
         controller = lab

@@ -24,7 +24,8 @@ practical. `./build.sh` is clean. `./test.sh` passes: `mcunit_test` with 14 chec
 | D2 test hooks, `test.sh` total | `193bcb4` | scripted run: the route was not saved, and the script ran once across a reset |
 | B1 Unicorn for macOS 14 | `50c36e3` | no linker warnings; Unicorn objects and the app binary say `minos 14.0`; `test.sh`, `mcusb_test`, `mcshutdown_test` pass. Not run on a real macOS 14 Mac. |
 | R1 audio after an output change | `91ea0f6`, `6ab9722` | new `AudioOutTests`: stopping the engine and posting `AVAudioEngineConfigurationChange` left it stopped before the fix, and it restarts now, off the main thread (it ran on it at first and froze the window for seconds); a stopped output stays stopped. Tried by hand: the sound follows a headphone plug and unplug. Unplug → Speakers takes ~50 ms. Plug-in → External Headphones takes 1.6–2.1 s, all inside `engine.start()` while macOS readies the new jack device; the same start takes 3–6 ms once it has settled, so that wait is the hardware, not the app |
-| R3 fault overlay with Restart | (these commits) | `mcunit_test`: `mcb_fault` reports an unmapped access after `mcb_run` returns; `BoardProblemTests` (4). Scripted runs with snapshots: `SPOKE_TEST="6:halt,14:restart,26:quit"` showed "The Model:Cycles stopped", Restart booted it again and the quit was a clean power-off; a 1-byte flash.bin showed "could not start" with the board's message. Not covered: an OS that hangs without an exception |
+| R3 fault overlay with Restart | `8452ec2`, `4b2d59c` | `mcunit_test`: `mcb_fault` reports an unmapped access after `mcb_run` returns; `BoardProblemTests` (4). Scripted runs with snapshots: `SPOKE_TEST="6:halt,14:restart,26:quit"` showed "The Model:Cycles stopped", Restart booted it again and the quit was a clean power-off; a 1-byte flash.bin showed "could not start" with the board's message. Not covered: an OS that hangs without an exception |
+| R5 board use after free from MiniLab timers and MIDI | (this commit) | `BoardHandleTests` (3): calls stop at `close()`, `close()` waits for a call in progress, a MiniLab pad B1 tap's delayed release does nothing once closed. Scripted run: boot, Reset +Drive, halt, Restart, quit, all clean. The CoreMIDI callbacks go through the handle too, so their part of R5 is covered without having been reproduced |
 
 Left from R11: `emmc_save_ext` (not atomic), `MidiStreamParser`'s unbounded SysEx (belongs with R4), and the
 `MiniLab.rescan` thread race. `README.md`'s Pieces table doesn't list `mcunit_test` yet: it had your
@@ -159,7 +160,7 @@ untested). *Confidence:* high that bytes are dropped; how big real dumps are is 
 queue on the Swift side that feeds the C ring as it frees up (backpressure). Send long SysEx in chunks or through
 `MIDIEventList`. A count of dropped bytes in `mcb_status`.
 
-**R5 — Medium, S. Possible use-after-free of the board after a reset or quit, from MiniLab timers.** The MiniLab
+**[done, see Progress] R5 — Medium, S. Possible use-after-free of the board after a reset or quit, from MiniLab timers.** The MiniLab
 closures call the C board directly through the raw pointer (`Board.swift:80-84`). Some timers keep the panel alive
 strongly: pad B track select (`MiniLab.swift:242-244`, up to 110 ms) and strip taps (`MiniLab.swift:445`, 50 ms).
 MIDI input stays live through the ~2 s shutdown, and `Board.stop()` → `mcb_destroy` frees the board. So a tap in the
