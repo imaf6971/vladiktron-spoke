@@ -111,6 +111,7 @@ struct mcboard {
     uint8_t enc_shown[4];                   // encoder byte last presented per column 4..7
     uint8_t enc_wait[16];                   // column reads left before the encoder's next transition
     atomic_ullong n_os_exceptions;          // entries into the OS's exception handler (0x40078ce2)
+    atomic_ullong busy_us;                  // CPU time run since the OS last reached IDLE_PC (mcb_busy_seconds)
     atomic_int pad_level[7];                // pad pressure as ADC value, by pad 1..6
     int fp_col;
     uint64_t n_fp_reads, n_irq_taken;
@@ -1686,9 +1687,14 @@ int mcb_run(mcboard *b, double seconds) {
     uc_reg_read(b->uc, UC_M68K_REG_PC, &pc);
     int ret = 0;
     while (!atomic_load(&b->stop) && (!end || now_us() < end)) {
+        double t_slice = now_us();
         atomic_store(&b->running, 1);
         uc_err r = uc_emu_start(b->uc, pc, 0xFFFFFFFFull, 0, 0);
         atomic_store(&b->running, 0);
+        // Busy time: what the slices ran since the OS last waited in its idle loop. Each slice counts at most 20 ms,
+        // so a Mac that slept in the middle of one does not look like a hung OS.
+        double slice_us = now_us() - t_slice;
+        atomic_store(&b->busy_us, b->idle ? 0 : atomic_load(&b->busy_us) + (uint64_t)(slice_us < 20000 ? slice_us : 20000));
         b->rt.slices++;
         uint32_t sr;
         uc_reg_read(b->uc, UC_M68K_REG_PC, &pc);
@@ -1733,6 +1739,7 @@ void mcb_power_key(mcboard *b, int down) { atomic_store(&b->power_key, down ? 1 
 int mcb_powered_off(mcboard *b) { return atomic_load(&b->powered_off); }
 uint64_t mcb_emmc_errors(mcboard *b) { return b->n_emmc_err; }
 uint64_t mcb_os_exceptions(mcboard *b) { return atomic_load(&b->n_os_exceptions); }
+double mcb_busy_seconds(mcboard *b) { return (double)atomic_load(&b->busy_us) / 1e6; }
 int mcb_fault(mcboard *b, char *out, size_t len) {
     if (len) snprintf(out, len, "%s", b->fault);
     return b->fault[0] != 0;

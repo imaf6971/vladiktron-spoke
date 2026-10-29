@@ -193,6 +193,31 @@ static void test_flash_save_batched(void) {
     check(!flash_file_zero(0x1F1000, 16), "what is still unsaved is saved when the board is destroyed");
 }
 
+// mcb_busy_seconds: how long the CPU has run without reaching the OS's idle loop. A hung OS keeps growing it; one
+// that waits in its idle loop keeps it near zero.
+static void test_busy_seconds(void) {
+    static uint8_t os[IDLE_PC - OS_BASE + 2];
+    static const uint8_t spin[] = {0x60, 0xFE};                               // bra.s . (not the idle loop)
+    char err[256];
+    memcpy(os + (OS_ENTRY - OS_BASE), spin, sizeof spin);
+    mcboard *b = create_os(os, sizeof os, MCB_FLASH_SIZE, err, sizeof err);
+    if (!b) { check(0, err); return; }
+    mcb_run(b, 1.0);
+    double busy = mcb_busy_seconds(b);
+    check(busy > 0.8 && busy < 1.5, "a CPU spinning outside the idle loop for 1 s is busy for about 1 s");
+    mcb_destroy(b);
+    memset(os, 0, sizeof os);
+    static const uint8_t to_idle[] = {0x4E, 0xF9, IDLE_PC >> 24, IDLE_PC >> 16 & 0xFF, IDLE_PC >> 8 & 0xFF, IDLE_PC & 0xFF};
+    memcpy(os + (OS_ENTRY - OS_BASE), to_idle, sizeof to_idle);              // jmp IDLE_PC
+    memcpy(os + (IDLE_PC - OS_BASE), spin, sizeof spin);                      // the idle loop: bra.s .
+    b = create_os(os, sizeof os, MCB_FLASH_SIZE, err, sizeof err);
+    if (!b) { check(0, err); return; }
+    mcb_run(b, 1.0);
+    busy = mcb_busy_seconds(b);
+    check(busy < 0.05, "a CPU waiting in the idle loop is not busy");
+    mcb_destroy(b);
+}
+
 // mcb_fault says why the CPU stopped, once mcb_run has returned; a healthy board has no fault.
 static void test_fault_report(void) {
     uint8_t os[0x100] = {0};
@@ -243,6 +268,7 @@ int main(void) {
     test_fault_report();
     test_midi_in_backpressure();
     test_flash_save_batched();
+    test_busy_seconds();
     char p[600];
     static const char *names[] = {"flash.bin", "emmc.img", "emmc.img.extcsd"};
     for (int i = 0; i < 3; i++) { path(p, sizeof p, names[i]); unlink(p); }

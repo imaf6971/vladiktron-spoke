@@ -36,6 +36,10 @@ int mcb_powered_off(mcboard *b);
 uint64_t mcb_emmc_errors(mcboard *b);
 // CPU exceptions the OS took (its handler prints "EXCEPTION ..." and halts: the OS is dead). 0 is healthy.
 uint64_t mcb_os_exceptions(mcboard *b);
+// How long (seconds of CPU time, thread-safe) the OS has run without a pause in its idle loop. It does all its work in
+// interrupts and short bursts, so this stays near zero; a hung OS (stuck in a loop, not in its exception handler) keeps
+// it growing. A slice counts at most 20 ms, so the Mac sleeping does not add to it.
+double mcb_busy_seconds(mcboard *b);
 // Whether the emulated CPU has stopped on a fault (an unmapped access, an emulator error): 1, with the reason in
 // `out` (also in mcb_status); 0 and an empty `out` if not. Read it once mcb_run has returned (it is written by the
 // CPU thread). mcb_run then returns nonzero, and the board cannot run on: destroy it and create a new one.
