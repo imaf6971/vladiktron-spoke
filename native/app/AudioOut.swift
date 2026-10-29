@@ -17,6 +17,11 @@ final class AudioOut {
     private var defaultListener: AudioObjectPropertyListenerBlock?
     private var bound: AudioDeviceID?                   // the device the engine plays on now
     private(set) var restartedOnMain: Bool?             // (for the tests: where the last restart ran)
+    private var steps: [String] = []                    // how long each part of the last (re)start took, for the log
+    /// When the engine was last (re)started and when it next renders, for the log. (Written by the render thread;
+    /// only read for a log line.)
+    private final class FirstRender { var started = 0.0, rendered = 0.0 }
+    private let firstRender = FirstRender()
     private let queue = DispatchQueue(label: "Vladiktron Spoke audio output", qos: .userInitiated)
     private let onQueueKey = DispatchSpecificKey<Bool>()
     private let name: String
@@ -56,11 +61,13 @@ final class AudioOut {
         var played = 0, underruns = 0, drops = 0, lastLog = 0
         var peak: Float = 0
         let log = ProcessInfo.processInfo.environment["SPOKE_AUDIOLOG"] != nil
+        let first = firstRender
         let node = AVAudioSourceNode(format: AudioOut.format) { _, _, frameCount, abl -> OSStatus in
             let out = UnsafeMutableAudioBufferListPointer(abl)
             let l = out[0].mData!.assumingMemoryBound(to: Float.self)
             let r = out[1].mData!.assumingMemoryBound(to: Float.self)
             let n = min(Int(frameCount), 8192)
+            if first.rendered == 0 { first.rendered = ProcessInfo.processInfo.systemUptime }
             var avail = available()
             if avail > AudioOut.ceiling {
                 var drop = avail - AudioOut.cushion
@@ -109,11 +116,15 @@ final class AudioOut {
         guard let node = source else { return false }
         do {
             let id = device ?? AudioOut.defaultOutput()
-            if let id { try engine.outputNode.auAudioUnit.setDeviceID(id) }
+            try step("device") { if let id { try engine.outputNode.auAudioUnit.setDeviceID(id) } }
             bound = id
-            engine.disconnectNodeOutput(node)
-            engine.connect(node, to: engine.mainMixerNode, format: AudioOut.format)
-            try engine.start()
+            step("connect") {
+                engine.disconnectNodeOutput(node)
+                engine.connect(node, to: engine.mainMixerNode, format: AudioOut.format)
+            }
+            firstRender.rendered = 0
+            firstRender.started = ProcessInfo.processInfo.systemUptime
+            try step("start") { try engine.start() }
             return true
         } catch {
             NSLog("Spoke: %@ audio output failed: %@", name, "\(error)")
@@ -126,16 +137,46 @@ final class AudioOut {
     private func restart(because reason: String, tries: Int = 5) {
         guard source != nil else { return }             // stopped for good
         restartedOnMain = Thread.isMainThread
-        let t0 = Date()
-        engine.stop()
+        let from = bound.map(AudioOut.describe) ?? "none"
+        steps = []
+        step("stop") { engine.stop() }
         let ok = run()
-        NSLog("Spoke %@: %@; output %@ in %.0f ms", name, reason, ok ? "restarted" : "did not start",
-              Date().timeIntervalSince(t0) * 1000)
-        if ok { return }
+        let to = bound.map(AudioOut.describe) ?? "none"
+        NSLog("Spoke %@: %@ (%@ -> %@); output %@: %@", name, reason, from, to, ok ? "restarted" : "did not start",
+              steps.joined(separator: ", "))
+        if ok {                                         // and when the device first asked for audio
+            queue.asyncAfter(deadline: .now() + 3) { [first = firstRender, name] in
+                let ms = first.rendered > 0 ? String(format: "%.0f ms", (first.rendered - first.started) * 1000) : "not yet"
+                NSLog("Spoke %@: first audio after the restart's start: %@", name, ms)
+            }
+            return
+        }
         guard tries > 1 else { NSLog("Spoke %@: the output would not start again", name); return }
         queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.restart(because: reason, tries: tries - 1)
         }
+    }
+
+    /// Runs `work` and notes in `steps` how long it took.
+    private func step<T>(_ what: String, _ work: () throws -> T) rethrows -> T {
+        let t0 = ProcessInfo.processInfo.systemUptime
+        defer { steps.append(String(format: "%@ %.0f ms", what, (ProcessInfo.processInfo.systemUptime - t0) * 1000)) }
+        return try work()
+    }
+
+    /// "Name @ 48000 Hz", for the log.
+    private static func describe(_ id: AudioDeviceID) -> String {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioObjectPropertyName, mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        var name: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        let n = AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &name) == noErr
+            ? (name?.takeRetainedValue() as String?) ?? "?" : "device \(id)"
+        addr.mSelector = kAudioDevicePropertyNominalSampleRate
+        var rate = Float64(0)
+        size = UInt32(MemoryLayout<Float64>.size)
+        _ = AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &rate)
+        return String(format: "%@ @ %.0f Hz", n, rate)
     }
 
     private static func defaultOutput() -> AudioDeviceID? {

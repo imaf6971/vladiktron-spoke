@@ -23,7 +23,7 @@ practical. `./build.sh` is clean. `./test.sh` passes: `mcunit_test` with 14 chec
 | U1 alert text | `73dbc2c` | build |
 | D2 test hooks, `test.sh` total | `193bcb4` | scripted run: the route was not saved, and the script ran once across a reset |
 | B1 Unicorn for macOS 14 | `50c36e3` | no linker warnings; Unicorn objects and the app binary say `minos 14.0`; `test.sh`, `mcusb_test`, `mcshutdown_test` pass. Not run on a real macOS 14 Mac. |
-| R1 audio after an output change | (this commit) | new `AudioOutTests`: stopping the engine and posting `AVAudioEngineConfigurationChange` left it stopped before the fix, and it restarts now; a stopped output stays stopped. **Not yet tried with a real switch** (headphones, Control Center) |
+| R1 audio after an output change | `91ea0f6`, `6ab9722` | new `AudioOutTests`: stopping the engine and posting `AVAudioEngineConfigurationChange` left it stopped before the fix, and it restarts now, off the main thread (it ran on it at first and froze the window for seconds); a stopped output stays stopped. Tried by hand: the sound follows a headphone plug and unplug. Unplug → Speakers takes ~50 ms. Plug-in → External Headphones takes 1.6–2.1 s, all inside `engine.start()` while macOS readies the new jack device; the same start takes 3–6 ms once it has settled, so that wait is the hardware, not the app |
 
 Left from R11: `emmc_save_ext` (not atomic), `MidiStreamParser`'s unbounded SysEx (belongs with R4), and the
 `MiniLab.rescan` thread race. `README.md`'s Pieces table doesn't list `mcunit_test` yet: it had your
