@@ -51,9 +51,15 @@ static void test_flash_size(void) {
     mcb_destroy(b);
 }
 
-// USB-MIDI event packets the host side queued (host -> device), as "cin b1 b2 b3" words.
+// USB-MIDI event packets the host side queued (host -> device), as "cin b1 b2 b3" words, in the order the device
+// gets them: real-time packets first.
 static int events(mcboard *b, uint32_t *out, int max) {
     int n = 0;
+    for (uint64_t r = b->usb.ev_rt_r; r != b->usb.ev_rt_w && n < max; r++, n++) {
+        const uint8_t *e = b->usb.ev_rt + 4 * (r & (MIDI_RT_RING - 1));
+        out[n] = (uint32_t)e[0] << 24 | e[1] << 16 | e[2] << 8 | e[3];
+    }
+    b->usb.ev_rt_r = b->usb.ev_rt_w;
     for (uint64_t r = b->usb.ev_r; r != b->usb.ev_w && n < max; r++, n++) {
         const uint8_t *e = b->usb.ev + 4 * (r & 4095);
         out[n] = (uint32_t)e[0] << 24 | e[1] << 16 | e[2] << 8 | e[3];
@@ -156,6 +162,36 @@ static void test_midi_in_backpressure(void) {
     check(first < sizeof in, "USB: a full packet queue takes no more bytes");
     check(off == sizeof in && o == sizeof in && memcmp(in, out, sizeof in) == 0,
           "USB: the whole SysEx arrives, in order, once the device takes the packets");
+    free(b);
+}
+
+// Real-time bytes (clock, start, stop) go ahead of a SysEx that still waits, on both ports: MIDI allows them between
+// any two bytes, and a DAW's clock must not stall for the 18 s a 60 KB SysEx takes at 31250 baud.
+static void test_midi_realtime_ahead(void) {
+    mcboard *b = calloc(1, sizeof *b);
+    static uint8_t sx[MIDI_RING + 100];
+    sx[0] = 0xF0;
+    for (size_t i = 1; i < sizeof sx; i++) sx[i] = 0x55;
+    size_t took = mcb_midi_in(b, sx, sizeof sx);
+    const uint8_t rt[2] = {0xF8, 0xFA};
+    size_t took_rt = mcb_midi_in(b, rt, 2);
+    check(took == MIDI_RING && took_rt == 2, "TRS: clock and start are taken while the SysEx fills the queue");
+    midi_rx_service(b, 0);                                    // one byte time: what the OS receives next
+    uint8_t first = b->uart_rb;
+    midi_rx_service(b, MIDI_BYTE_US);
+    uint8_t second = b->uart_rb;
+    midi_rx_service(b, 2 * MIDI_BYTE_US);
+    check(first == 0xF8 && second == 0xFA && b->uart_rb == 0xF0 && b->min_r == 1,
+          "TRS: they reach the OS at the next byte boundaries, then the SysEx goes on");
+    free(b);
+
+    b = calloc(1, sizeof *b);
+    mcb_usb_midi_in(b, sx, 1);                                // F0, then data until the packet queue is full
+    while (mcb_usb_midi_in(b, sx + 1, 3) == 3) {}
+    took_rt = mcb_usb_midi_in(b, rt, 2);
+    const uint8_t *e = b->usb.ev_rt + 4 * (b->usb.ev_rt_r & (MIDI_RT_RING - 1));
+    check(took_rt == 2 && b->usb.ev_rt_w - b->usb.ev_rt_r == 2 && e[0] == 0xF && e[1] == 0xF8,
+          "USB: clock and start are taken as packets of their own while the SysEx packets fill the queue");
     free(b);
 }
 
@@ -267,6 +303,7 @@ int main(void) {
     test_usb_play_packet_bound();
     test_fault_report();
     test_midi_in_backpressure();
+    test_midi_realtime_ahead();
     test_flash_save_batched();
     test_busy_seconds();
     char p[600];

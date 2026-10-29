@@ -30,6 +30,7 @@ void uc_m68k_kick(uc_engine *uc);
 #define BLOCK_US (32 * 1e6 / 48000)  // one 32-frame audio block
 #define MIDI_RING 4096               // MIDI byte rings to/from the host (power of two)
 #define MIDI_BYTE_US 320.0           // one byte at 31250 baud (10 bits)
+#define MIDI_RT_RING 64              // real-time bytes (F8-FF) waiting to go ahead of the rest (power of two)
 #define UART9 0xEC074000u            // MIDI IN / OUT
 #define USB 0xFC0B0000u              // USB OTG controller, device mode (ChipIdea/EHCI style)
 // Power: the power key is port A pin data (0xEC094018) bit 2, 1 = pressed. (Bit 3 next to it is the battery
@@ -165,6 +166,8 @@ struct mcboard {
     uint8_t uart_rb, uart_imr;
     uint8_t midi_in[MIDI_RING], midi_out[MIDI_RING];
     atomic_uint_fast64_t min_w, min_r, mout_w, mout_r;
+    uint8_t midi_rt[MIDI_RT_RING];          // real-time bytes in, sent ahead of what waits in midi_in (MIDI allows
+    atomic_uint_fast64_t mrt_w, mrt_r;      // them between any two bytes, inside SysEx too)
     double midi_rx_due;
     uint64_t n_midi_in, n_midi_out;
 
@@ -198,6 +201,8 @@ struct mcboard {
         double gpt_due[2];
         uint8_t ev[4096 * 4];               // USB-MIDI event packets waiting for the device (host -> device)
         atomic_uint_fast64_t ev_w, ev_r;
+        uint8_t ev_rt[MIDI_RT_RING * 4];    // real-time event packets, sent ahead of those in ev
+        atomic_uint_fast64_t ev_rt_w, ev_rt_r;
         uint8_t ev_status, ev_data[3], ev_n; // host-side parser of raw bytes into event packets
         uint8_t sx[3]; int sx_n, in_sysex;
         uint8_t out[MIDI_RING];             // raw MIDI bytes from the device
@@ -1326,12 +1331,20 @@ static void usb_host(mcboard *b, double t) {
     }
     if (b->usb.midi_out_ep) {
         uint64_t r = atomic_load(&b->usb.ev_r), w = atomic_load(&b->usb.ev_w);
-        if (r != w && b->usb.cur[b->usb.midi_out_ep * 2]) {
+        uint64_t rr = atomic_load(&b->usb.ev_rt_r), rw = atomic_load(&b->usb.ev_rt_w);
+        if ((r != w || rr != rw) && b->usb.cur[b->usb.midi_out_ep * 2]) {
             uint8_t buf[512];
-            int n = 0;
+            int n = 0, n_rt;
+            for (; rr != rw && n < (int)sizeof buf; rr++, n += 4) memcpy(buf + n, b->usb.ev_rt + 4 * (rr & (MIDI_RT_RING - 1)), 4);
+            n_rt = n / 4;                                     // real-time packets first, then the rest
             for (; r != w && n < (int)sizeof buf; r++, n += 4) memcpy(buf + n, b->usb.ev + 4 * (r & 4095), 4);
             int sent = usb_xfer(b, b->usb.midi_out_ep * 2, buf, n);
-            if (sent > 0) { atomic_store(&b->usb.ev_r, atomic_load(&b->usb.ev_r) + (uint64_t)sent / 4); b->usb.n_in += (uint64_t)sent / 4; }
+            if (sent > 0) {
+                int k = sent / 4, k_rt = k < n_rt ? k : n_rt;
+                atomic_store(&b->usb.ev_rt_r, atomic_load(&b->usb.ev_rt_r) + (uint64_t)k_rt);
+                atomic_store(&b->usb.ev_r, atomic_load(&b->usb.ev_r) + (uint64_t)(k - k_rt));
+                b->usb.n_in += (uint64_t)k;
+            }
         }
     }
 }
@@ -1463,10 +1476,14 @@ static void midi_tx_dma(mcboard *b) {
 static void midi_rx_service(mcboard *b, double t) {
     if (b->midi_rx_due < t - 1000) b->midi_rx_due = t - 1000;
     while (b->midi_rx_due <= t) {
-        uint64_t r = atomic_load(&b->min_r);
-        if (r == atomic_load(&b->min_w)) { b->midi_rx_due = t; return; }
-        b->uart_rb = b->midi_in[r & (MIDI_RING - 1)];
-        atomic_store(&b->min_r, r + 1);
+        uint64_t rt = atomic_load(&b->mrt_r), r = atomic_load(&b->min_r);
+        if (rt != atomic_load(&b->mrt_w)) {                   // a real-time byte goes at the next byte boundary
+            b->uart_rb = b->midi_rt[rt & (MIDI_RT_RING - 1)];
+            atomic_store(&b->mrt_r, rt + 1);
+        } else if (r != atomic_load(&b->min_w)) {
+            b->uart_rb = b->midi_in[r & (MIDI_RING - 1)];
+            atomic_store(&b->min_r, r + 1);
+        } else { b->midi_rx_due = t; return; }
         if ((b->erq >> 36) & 1) { dma_run(b, 36, 0); b->n_midi_in++; }
         b->midi_rx_due += MIDI_BYTE_US;
     }
@@ -1614,7 +1631,8 @@ static double next_event(mcboard *b, double t, double cap) {
     for (int n = 0; n < 2; n++) if (b->usb.gpt_ctrl[n] & 0x80000000u) EARLIER(b->usb.gpt_due[n]);
     if (b->dma50_enabled) EARLIER(b->dma50_due);
     if (b->usb.cmd & 1) EARLIER(b->usb.state == USB_READY ? usb_next_uframe(b) : b->usb.due);
-    if (atomic_load(&b->min_r) != atomic_load(&b->min_w)) EARLIER(b->midi_rx_due);
+    if (atomic_load(&b->min_r) != atomic_load(&b->min_w) || atomic_load(&b->mrt_r) != atomic_load(&b->mrt_w))
+        EARLIER(b->midi_rx_due);
 #undef EARLIER
     return d;
 }
@@ -1797,10 +1815,19 @@ size_t mcb_audio_available(mcboard *b) {
 }
 
 size_t mcb_midi_in(mcboard *b, const uint8_t *data, size_t n) {
-    uint64_t w = atomic_load(&b->min_w);
+    uint64_t w = atomic_load(&b->min_w), rw = atomic_load(&b->mrt_w);
     size_t i = 0;
-    for (; i < n && w - atomic_load(&b->min_r) < MIDI_RING; i++, w++) b->midi_in[w & (MIDI_RING - 1)] = data[i];
-    atomic_store(&b->min_w, w);
+    for (; i < n; i++) {
+        if (data[i] >= 0xF8) {                                // real-time: its own queue, ahead of the rest
+            if (rw - atomic_load(&b->mrt_r) >= MIDI_RT_RING) break;
+            b->midi_rt[rw++ & (MIDI_RT_RING - 1)] = data[i];
+            atomic_store(&b->mrt_w, rw);
+        } else {
+            if (w - atomic_load(&b->min_r) >= MIDI_RING) break;
+            b->midi_in[w++ & (MIDI_RING - 1)] = data[i];
+            atomic_store(&b->min_w, w);
+        }
+    }
     return i;
 }
 
@@ -1815,10 +1842,17 @@ size_t mcb_midi_out(mcboard *b, uint8_t *out, size_t max) {
 size_t mcb_usb_midi_in(mcboard *b, const uint8_t *data, size_t n) {
     static const uint8_t len[8] = {2, 2, 2, 2, 1, 1, 2, 0};  // data bytes for 8x..Ex
     for (size_t i = 0; i < n; i++) {
+        uint8_t c = data[i];
+        if (c >= 0xF8) {                                      // real-time: its own queue, ahead of the rest
+            uint64_t w = atomic_load(&b->usb.ev_rt_w);
+            if (w - atomic_load(&b->usb.ev_rt_r) >= MIDI_RT_RING) return i;
+            uint8_t *e = b->usb.ev_rt + 4 * (w & (MIDI_RT_RING - 1));
+            e[0] = 0xF; e[1] = c; e[2] = 0; e[3] = 0;
+            atomic_store(&b->usb.ev_rt_w, w + 1);
+            continue;
+        }
         if (atomic_load(&b->usb.ev_w) - atomic_load(&b->usb.ev_r) > 4096 - 2)
             return i;                                         // a byte makes at most two packets: no room, stop here
-        uint8_t c = data[i];
-        if (c >= 0xF8) { usb_event(b, 0xF, c, 0, 0); continue; }
         if (c == 0xF0) { b->usb.in_sysex = 1; b->usb.sx[0] = c; b->usb.sx_n = 1; b->usb.ev_status = 0; continue; }
         if (b->usb.in_sysex) {
             if (c == 0xF7 || c >= 0x80) {                     // end (a status byte also ends it)

@@ -31,4 +31,23 @@ final class MidiPortPairTests: XCTestCase {
         for _ in 0..<100 { p.flush() }
         XCTAssertEqual(got, [0xF0] + first + [0xF7] + note)
     }
+
+    func testClockGoesAheadOfAWaitingSysEx() {
+        var got: [UInt8] = []
+        var room = 0                                    // the board's queue: full until the OS reads some of it
+        let p = MidiPortPair(name: "test", inject: { ptr, n in
+            var k = 0
+            while k < n && (ptr[k] >= 0xF8 || room > 0) {   // real-time bytes have a queue of their own
+                if ptr[k] < 0xF8 { room -= 1 }
+                got.append(ptr[k]); k += 1
+            }
+            return k
+        }, drain: { _, _ in 0 })
+        let sysex: [UInt8] = [0xF0] + [UInt8](repeating: 0x55, count: 1000) + [0xF7]
+        p.send(sysex)
+        p.send([0xF8, 0x90, 60, 100, 0xFA])
+        XCTAssertEqual(got, [0xF8, 0xFA], "clock and start go in at once; the note waits behind the SysEx")
+        for _ in 0..<100 { room = 20; p.flush() }
+        XCTAssertEqual(got, [0xF8, 0xFA] + sysex + [0x90, 60, 100])
+    }
 }

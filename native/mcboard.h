@@ -77,7 +77,8 @@ size_t mcb_audio_available(mcboard *b);
 
 // MIDI (the DIN/TRS ports): bytes in for the OS's MIDI IN, delivered at 31250 baud; bytes the OS sent on
 // MIDI OUT/THRU. One writer and one reader each, thread-safe against the CPU thread. mcb_midi_in returns how many
-// bytes it took (its 4 KB queue drains at 3 KB/s): send the rest again later.
+// bytes it took (its 4 KB queue drains at 3 KB/s): send the rest again later. Real-time bytes (F8-FF: clock,
+// start, stop) have a queue of their own and go ahead of what waits, so a long SysEx does not hold up the clock.
 size_t mcb_midi_in(mcboard *b, const uint8_t *data, size_t n);
 size_t mcb_midi_out(mcboard *b, uint8_t *out, size_t max);
 

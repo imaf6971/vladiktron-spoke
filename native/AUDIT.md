@@ -31,6 +31,7 @@ practical. `./build.sh` is clean. `./test.sh` passes: `mcunit_test` with 14 chec
 | T1 firmware decoder tests | `dda4ec3` | `mcfirmware_test`: 18 kinds of wrong file with made-up SysEx, plus the real file when present; a decoder without its checksum check fails it |
 | T3 CI | `eda0932` | `.github/workflows/ci.yml` runs `build.sh` and `test.sh` on macOS runners; rehearsed in a fresh clone with no `build/` and no `.syx` (built in 26 s, all firmware-free checks passed). **First run on GitHub not seen yet** |
 | U2 failures that said nothing | `c444565` | `AudioOutTests`: an output that will not start (no such device) reports it with the device and Core Audio's error, and a started one reports nothing; `NoticeTests`: the microphone notice names the input and links to the setting, and the bar renders (picture checked). A normal scripted run shows no bar. **Not tried by hand**: a real denied microphone, a real output that refuses to start |
+| M1 clock behind SysEx | (this commit) | `mcunit_test` (3 new checks) and `MidiPortPairTests` (1 new): clock and start sent during a full SysEx queue go in at once and reach the OS at the next byte boundaries, on TRS and USB; all four failed with the old code. With the OS (scratch test): a note with F8 between its bytes plays at full level (0.39, the same as a plain note); 24 clocks sent behind 3 KB of SysEx were all taken within 50 ms with 2865 SysEx bytes still waiting (about 1 s before); a note after the SysEx plays; no OS exceptions. Not tried with a DAW's clock |
 | An OS hang (no exception) | (these commits) | `mcunit_test`: a CPU spinning outside the idle loop for 1 s is busy ~1 s, one in the idle loop is not; `BoardProblemTests`: past `Board.hangSeconds` (10 s) the OS "stopped responding". With the OS (scratch test): longest busy stretch 0.12–0.26 s (boot formatting a new +Drive), playing and saving under 0.01 s; with its render interrupt patched into a masked spin, busy climbs 3, 6, 9, 12 s and audio stops. The app's overlay for it was not triggered in the running app |
 
 Left from R11: `emmc_save_ext` (not atomic), `MidiStreamParser`'s unbounded SysEx (belongs with R4), and the
@@ -42,6 +43,12 @@ uncommitted edits, so I left it alone.
   Unicorn object: "built for newer 'macOS' version (27.0) than being linked (14.0)". `build.sh` doesn't pass
   `CMAKE_OSX_DEPLOYMENT_TARGET`, so Unicorn targets the build machine's OS. On an older macOS the app may fail to
   load or run. *Fix:* `-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0` in `build.sh` (and remove `build/unicorn` once).
+- **[done, see Progress] M1 — Medium, S. MIDI clock waited behind SysEx.** Everything sent to the board queued in
+  order, real-time bytes too: a DAW's clock, start and stop sent during a 60 KB SysEx on TRS arrived up to 18 s
+  late. MIDI lets real-time bytes go between any two bytes (gearmulator's Machinedrum fork lets clock cross a
+  SysEx the same way). Now they have their own small queue in the board (`midi_rt`, `usb.ev_rt`) and in
+  `MidiPortPair`, and go at the next byte boundary (TRS) or ahead of the waiting packets (USB). Notes and CCs still
+  wait behind the SysEx, as on one wire. This does not change O1, which is the OS taking longer than the wire.
 - **O1 — Low, to check on hardware. Notes on TRS lag behind a long SysEx.** The OS works through SysEx from the
   jacks a little slower than they deliver it: after 4 KB a note waits about 3 s; after 60 KB (18 s at 31250 baud),
   about 4 s. It always recovers, and USB shows no lag. Whether a real Model:Cycles lags the same is unknown;

@@ -15,6 +15,10 @@ final class MidiPortPair {
     // in far faster than the jacks' 31250 baud (or USB) take it; it waits here instead of being lost.
     private var waiting: [UInt8] = []
     private var waitingFrom = 0
+    // Real-time bytes (F8-FF: clock, start, stop) do not wait behind them: MIDI lets them go between any two bytes, so
+    // a DAW's clock keeps time during a SysEx transfer. The board queues them apart and sends them first; these are
+    // the few its real-time queue had no room for yet.
+    private var waitingRealTime: [UInt8] = []
     static let waitingLimit = 16 << 20             // past this much waiting, new bytes are dropped (and logged)
     private var parser = MidiStreamParser()
     fileprivate var source = MIDIEndpointRef()
@@ -31,19 +35,30 @@ final class MidiPortPair {
     func send(_ bytes: UnsafePointer<UInt8>, _ count: Int) {
         lock.lock(); defer { lock.unlock() }
         var taken = 0
-        if waitingFrom == waiting.count { taken = inject(bytes, count) }      // nothing waits: straight in
+        if waitingFrom == waiting.count && waitingRealTime.isEmpty { taken = inject(bytes, count) }  // straight in
         guard taken < count else { return }
-        if waiting.count - waitingFrom + count - taken > MidiPortPair.waitingLimit {
-            NSLog("Spoke: %@: %ld MIDI bytes dropped, %ld already waiting for the board", name, count - taken,
-                  waiting.count - waitingFrom)
+        let rest = UnsafeBufferPointer(start: bytes + taken, count: count - taken)
+        if waiting.count - waitingFrom + waitingRealTime.count + rest.count > MidiPortPair.waitingLimit {
+            NSLog("Spoke: %@: %ld MIDI bytes dropped, %ld already waiting for the board", name, rest.count,
+                  waiting.count - waitingFrom + waitingRealTime.count)
             return
         }
-        waiting.append(contentsOf: UnsafeBufferPointer(start: bytes + taken, count: count - taken))
+        for byte in rest {
+            if byte >= 0xF8 { waitingRealTime.append(byte) } else { waiting.append(byte) }
+        }
+        flushRealTime()
+    }
+
+    private func flushRealTime() {                 // (under `lock`)
+        guard !waitingRealTime.isEmpty else { return }
+        let n = waitingRealTime.withUnsafeBufferPointer { inject($0.baseAddress!, $0.count) }
+        waitingRealTime.removeFirst(n)
     }
 
     /// Feeds the board what waits, as far as it has room (the MIDI timer calls this every millisecond).
     func flush() {
         lock.lock(); defer { lock.unlock() }
+        flushRealTime()
         guard waitingFrom < waiting.count else { return }
         waitingFrom += waiting.withUnsafeBufferPointer { inject($0.baseAddress! + waitingFrom, $0.count - waitingFrom) }
         if waitingFrom == waiting.count {
