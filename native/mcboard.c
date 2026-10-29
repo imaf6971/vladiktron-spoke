@@ -216,14 +216,13 @@ struct mcboard {
 
     // run control / outputs
     atomic_int stop;
-    atomic_int running;                     // a slice is executing (watchdog kicks it)
+    double insns_per_us;                    // how fast this Mac runs the OS: sizes each slice's instruction budget
     int idle;                               // the slice ended at IDLE_PC
     atomic_uint last_pc, last_sr;           // CPU state after the last slice, for mcb_status: only the CPU
                                             // thread may call into Unicorn while it runs (Unicorn keeps the
                                             // thread's JIT write/execute state in shared fields; a uc_reg_read
                                             // from another thread can leave the CPU thread's JIT pages
                                             // writable, and the next slice faults executing them)
-    pthread_t watchdog;
     pthread_mutex_t lock;
     uint8_t screen[1024];
     uint64_t screen_gen;
@@ -1628,15 +1627,18 @@ static void snapshot_screen(mcboard *b) {
     pthread_mutex_unlock(&b->lock);
 }
 
-// Slices end on a watchdog kick (every SLICE_US, or SLICE_USB_US while USB audio streams), always at a
-// translation-block boundary.
-static void *watchdog_main(void *arg) {
-    mcboard *b = arg;
-    while (!atomic_load(&b->stop)) {
-        usleep(b->usb.cap_alt || b->usb.play_alt ? SLICE_USB_US : SLICE_US);
-        if (atomic_load(&b->running)) uc_m68k_kick(b->uc);
-    }
-    return NULL;
+// A slice ends at IDLE_PC, or on its instruction budget: about SLICE_US of running (SLICE_USB_US while USB audio
+// streams) at the speed this Mac has been running the OS, always at a translation-block boundary. (A watchdog
+// thread used to end slices with a kick every 1 ms; it woke 1,000 times a second, 8,000 with USB audio, even while
+// the CPU thread slept.)
+static void slice_budget(mcboard *b) {
+    double us = b->usb.cap_alt || b->usb.play_alt ? SLICE_USB_US : SLICE_US;
+    uc_m68k_set_ilimit(b->uc, uc_m68k_icount(b->uc) + (uint64_t)(b->insns_per_us * us) + 1);
+}
+static void slice_speed(mcboard *b, uint64_t insns, double us) {   // learn the speed from slices long enough to time
+    if (us < 50) return;
+    double v = b->insns_per_us * 0.9 + insns / us * 0.1;
+    b->insns_per_us = v < 20 ? 20 : v > 5000 ? 5000 : v;
 }
 
 // MCB_RTLOG=1: once a second, how the board kept real time: CPU slices, audio blocks (late = started more than
@@ -1732,21 +1734,19 @@ int mcb_run(mcboard *b, double seconds) {
     double end = seconds > 0 ? now_us() + seconds * 1e6 : 0;
     if (atomic_load(&b->powered_off)) return 0;              // powered off: nothing runs any more
     atomic_store(&b->stop, 0);
-    if (pthread_create(&b->watchdog, NULL, watchdog_main, b) != 0) {   // without it, slices never end
-        snprintf(b->fault, sizeof b->fault, "could not start the watchdog thread");
-        return 1;
-    }
+    if (!b->insns_per_us) b->insns_per_us = 200;             // (M4 Pro: ~270; learnt within a few slices)
     uint32_t pc;
     uc_reg_read(b->uc, UC_M68K_REG_PC, &pc);
     int ret = 0;
     while (!atomic_load(&b->stop) && (!end || now_us() < end)) {
         double t_slice = now_us();
-        atomic_store(&b->running, 1);
+        uint64_t i_slice = uc_m68k_icount(b->uc);
+        slice_budget(b);
         uc_err r = uc_emu_start(b->uc, pc, 0xFFFFFFFFull, 0, 0);
-        atomic_store(&b->running, 0);
         // Busy time: what the slices ran since the OS last waited in its idle loop. Each slice counts at most 20 ms,
         // so a Mac that slept in the middle of one does not look like a hung OS.
         double slice_us = now_us() - t_slice;
+        if (!b->idle) slice_speed(b, uc_m68k_icount(b->uc) - i_slice, slice_us);   // (idle: ended early, not on budget)
         atomic_store(&b->busy_us, b->idle ? 0 : atomic_load(&b->busy_us) + (uint64_t)(slice_us < 20000 ? slice_us : 20000));
         b->rt.slices++;
         uint32_t sr;
@@ -1777,7 +1777,6 @@ int mcb_run(mcboard *b, double seconds) {
         }
     }
     atomic_store(&b->stop, 1);
-    pthread_join(b->watchdog, NULL);
     flash_save(b);
     fflush(b->card.f);
     return ret;
