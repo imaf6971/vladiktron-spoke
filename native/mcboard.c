@@ -76,6 +76,7 @@ typedef struct {
     int cmd, nargs, dirty;
     uint8_t args[4];
     uint32_t addr;
+    double save_due;                        // host time (us) to save the image (0: none due), see flash_service
 } spiflash;
 
 typedef struct {
@@ -221,7 +222,7 @@ struct mcboard {
     uint64_t screen_gen;
     double next_screen;
     char fault[256];
-    uint64_t n_irq[256], n_cmd, n_rd, n_wr, n_erase, n_emmc_err;
+    uint64_t n_irq[256], n_cmd, n_rd, n_wr, n_erase, n_emmc_err, n_flash_saves;
 };
 
 static uint8_t *io_ptr(mcboard *b, uint32_t a) {
@@ -355,8 +356,17 @@ static void flash_save(mcboard *b) {                         // whole image, swa
     int ok = fwrite(b->flash.mem, 1, b->flash.size, f) == b->flash.size;
     ok &= fflush(f) == 0 && fsync(fileno(f)) == 0;
     ok &= fclose(f) == 0;
-    if (ok && rename(tmp, b->flash.path) == 0) b->flash.dirty = 0;
+    if (ok && rename(tmp, b->flash.path) == 0) { b->flash.dirty = 0; b->n_flash_saves++; }
     else { fprintf(stderr, "[flash] could not save %s\n", b->flash.path); unlink(tmp); }
+}
+// The OS saves its settings as a sector erase and page programs, each its own command. Saving all 2 MB (and an
+// fsync) after each one stopped the CPU for every command; the image is now saved FLASH_SAVE_US after the first
+// change, between slices, once for the lot (and when the run ends: mcb_run, mcb_destroy). A failed save tries again.
+#define FLASH_SAVE_US 500000.0
+static void flash_service(mcboard *b, double t) {
+    if (!b->flash.save_due || t < b->flash.save_due) return;
+    flash_save(b);
+    b->flash.save_due = b->flash.dirty ? t + 10 * FLASH_SAVE_US : 0;
 }
 static uint8_t flash_xfer(spiflash *s, uint8_t v) {
     if (s->cmd < 0) {
@@ -735,7 +745,10 @@ static void mmio_write(uc_engine *uc, uint64_t off, unsigned size, uint64_t valu
     }
     else if (a == 0xFC05C034u) {                             // DSPI0 PUSHR -> flash
         if (b->dspi0_n < (int)sizeof b->dspi0_rx) b->dspi0_rx[b->dspi0_n++] = flash_xfer(&b->flash, v & 0xFF);
-        if (!(v >> 31)) { b->flash.cmd = -1; flash_save(b); }
+        if (!(v >> 31)) {                                    // chip select released: the command is done
+            b->flash.cmd = -1;
+            if (b->flash.dirty && !b->flash.save_due) b->flash.save_due = t + FLASH_SAVE_US;
+        }
     } else if (size == 1 && ((a & 0xFFFu) == 0x01C || (a & 0xFFFu) == 0x01D) &&
                (a >> 12 == 0xFC048 || a >> 12 == 0xFC04C || a >> 12 == 0xFC050)) {
         int n = a >> 12 == 0xFC048 ? 0 : a >> 12 == 0xFC04C ? 1 : 2;   // SIMR / CIMR
@@ -1695,6 +1708,7 @@ int mcb_run(mcboard *b, double seconds) {
         dma50_check(b, t);
         midi_rx_service(b, t);
         usb_gpt_service(b, t);
+        flash_service(b, t);
         usb_host(b, t);
         dma50_check(b, t);                                   // (USB audio interleaves the two in time order)
         if (t >= b->rt.next) rt_log(b, t);

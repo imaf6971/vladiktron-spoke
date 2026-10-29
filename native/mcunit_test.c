@@ -159,6 +159,40 @@ static void test_midi_in_backpressure(void) {
     free(b);
 }
 
+// SPI flash writes (the OS saving its settings) reach flash.bin in one save shortly after, not one 2 MB save per
+// command; whatever is still unsaved is saved when the board is destroyed.
+static void spi(mcboard *b, uint8_t v, int more) {         // one byte through DSPI0 PUSHR (CONT = chip select stays)
+    mmio_write(b->uc, 0x5C034, 4, (more ? 1u << 31 : 0) | v, mmio_ctx[1]);
+    b->dspi0_n = 0;                                           // the OS reads each answer back (POPR)
+}
+static void spi_cmd(mcboard *b, uint8_t cmd, uint32_t addr, int data_bytes) {
+    spi(b, 0x06, 0);                                          // write enable
+    spi(b, cmd, 1);
+    spi(b, (uint8_t)(addr >> 16), 1); spi(b, (uint8_t)(addr >> 8), 1); spi(b, (uint8_t)addr, data_bytes > 0);
+    for (int i = 0; i < data_bytes; i++) spi(b, 0x00, i + 1 < data_bytes);
+}
+static int flash_file_zero(uint32_t at, size_t n) {
+    char p[600]; path(p, sizeof p, "flash.bin");
+    FILE *f = fopen(p, "rb"); uint8_t buf[4096]; int zero = 1;
+    if (!f || fseek(f, at, SEEK_SET) || fread(buf, 1, n, f) != n) zero = 0;
+    for (size_t i = 0; zero && i < n; i++) zero = buf[i] == 0;
+    if (f) fclose(f);
+    return zero;
+}
+static void test_flash_save_batched(void) {
+    char err[256];
+    mcboard *b = create(MCB_FLASH_SIZE, err, sizeof err);    // (the image is all zeros: the erase makes it FF)
+    if (!b) { check(0, err); return; }
+    spi_cmd(b, 0x20, 0x1F0000, 0);                            // erase a 4 KB sector, then program it, 16 pages
+    for (uint32_t k = 0; k < 16; k++) spi_cmd(b, 0x02, 0x1F0000 + 256 * k, 256);
+    check(b->n_flash_saves == 0, "17 flash commands: flash.bin is not saved at once");
+    flash_service(b, now_us() - b->t0 + 1e6);                 // a second later, between CPU slices
+    check(b->n_flash_saves == 1 && flash_file_zero(0x1F0000, 4096), "... but once, a moment later, with all of it");
+    spi_cmd(b, 0x20, 0x1F1000, 0);                            // one more sector, then the board goes
+    mcb_destroy(b);
+    check(!flash_file_zero(0x1F1000, 16), "what is still unsaved is saved when the board is destroyed");
+}
+
 // mcb_fault says why the CPU stopped, once mcb_run has returned; a healthy board has no fault.
 static void test_fault_report(void) {
     uint8_t os[0x100] = {0};
@@ -208,6 +242,7 @@ int main(void) {
     test_usb_play_packet_bound();
     test_fault_report();
     test_midi_in_backpressure();
+    test_flash_save_batched();
     char p[600];
     static const char *names[] = {"flash.bin", "emmc.img", "emmc.img.extcsd"};
     for (int i = 0; i < 3; i++) { path(p, sizeof p, names[i]); unlink(p); }
