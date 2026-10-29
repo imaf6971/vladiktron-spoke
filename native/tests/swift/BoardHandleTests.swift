@@ -35,7 +35,7 @@ final class BoardHandleTests: XCTestCase {
         let lock = NSLock()
         let panel = MiniLab.Panel(key: { k, d in h.with { _ in lock.lock(); keys.append("\(k) \(d)"); lock.unlock() } },
                                   turn: { _, _ in }, nudge: { _, _ in }, pad: { _, _ in }, leds: { 0 })
-        let notes = MidiPortPair(name: "test", inject: { _, _ in }, drain: { _, _ in 0 })
+        let notes = MidiPortPair(name: "test", inject: { _, n in n }, drain: { _, _ in 0 })
         let lab = MiniLab(panel: panel, notes: notes, onChange: { _ in })
         lab.handle([0x99, 44, 100])                                  // Arturia mode, pad B1: TRACK + pad, released later
         _ = h.close()                                               // the board goes away right after the tap

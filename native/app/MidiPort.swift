@@ -8,23 +8,49 @@ import MCBoard
 /// One connection: a CoreMIDI destination feeding the board, and a source carrying what the board sends.
 final class MidiPortPair {
     let name: String
-    private let inject: (UnsafePointer<UInt8>, Int) -> Void
+    private let inject: (UnsafePointer<UInt8>, Int) -> Int    // bytes the board took (its queue may be full)
     private let drain: (UnsafeMutablePointer<UInt8>, Int) -> Int
     private let lock = NSLock()                    // the board's input side takes one writer at a time
+    // Bytes the board had no room for yet, oldest first, from `waitingFrom` on (under `lock`). A SysEx restore comes
+    // in far faster than the jacks' 31250 baud (or USB) take it; it waits here instead of being lost.
+    private var waiting: [UInt8] = []
+    private var waitingFrom = 0
+    static let waitingLimit = 16 << 20             // past this much waiting, new bytes are dropped (and logged)
     private var parser = MidiStreamParser()
     fileprivate var source = MIDIEndpointRef()
     fileprivate var destination = MIDIEndpointRef()
 
-    init(name: String, inject: @escaping (UnsafePointer<UInt8>, Int) -> Void,
+    init(name: String, inject: @escaping (UnsafePointer<UInt8>, Int) -> Int,
          drain: @escaping (UnsafeMutablePointer<UInt8>, Int) -> Int) {
         self.name = name
         self.inject = inject
         self.drain = drain
     }
 
-    /// Raw MIDI bytes into the board (from CoreMIDI or the controller mapping).
+    /// Raw MIDI bytes into the board (from CoreMIDI or the controller mapping), after any that still wait.
     func send(_ bytes: UnsafePointer<UInt8>, _ count: Int) {
-        lock.lock(); inject(bytes, count); lock.unlock()
+        lock.lock(); defer { lock.unlock() }
+        var taken = 0
+        if waitingFrom == waiting.count { taken = inject(bytes, count) }      // nothing waits: straight in
+        guard taken < count else { return }
+        if waiting.count - waitingFrom + count - taken > MidiPortPair.waitingLimit {
+            NSLog("Spoke: %@: %ld MIDI bytes dropped, %ld already waiting for the board", name, count - taken,
+                  waiting.count - waitingFrom)
+            return
+        }
+        waiting.append(contentsOf: UnsafeBufferPointer(start: bytes + taken, count: count - taken))
+    }
+
+    /// Feeds the board what waits, as far as it has room (the MIDI timer calls this every millisecond).
+    func flush() {
+        lock.lock(); defer { lock.unlock() }
+        guard waitingFrom < waiting.count else { return }
+        waitingFrom += waiting.withUnsafeBufferPointer { inject($0.baseAddress! + waitingFrom, $0.count - waitingFrom) }
+        if waitingFrom == waiting.count {
+            waiting.removeAll(keepingCapacity: true); waitingFrom = 0
+        } else if waitingFrom > 65536 && waitingFrom * 2 > waiting.count {
+            waiting.removeFirst(waitingFrom); waitingFrom = 0
+        }
     }
     func send(_ bytes: [UInt8]) { bytes.withUnsafeBufferPointer { send($0.baseAddress!, $0.count) } }
 
@@ -39,6 +65,7 @@ final class MidiPortPair {
     }
 
     fileprivate func pump(_ buf: UnsafeMutablePointer<UInt8>, _ cap: Int) {
+        flush()
         let n = drain(buf, cap)
         for i in 0..<n { if let msg = parser.feed(buf[i]) { emit(msg) } }
     }
@@ -48,7 +75,10 @@ final class MidiPortPair {
         storage.withUnsafeMutableBytes { raw in
             let list = raw.baseAddress!.assumingMemoryBound(to: MIDIPacketList.self)
             let packet = MIDIPacketListInit(list)
-            MIDIPacketListAdd(list, raw.count, packet, mach_absolute_time(), msg.count, msg)
+            guard MIDIPacketListAdd(list, raw.count, packet, mach_absolute_time(), msg.count, msg) != nil else {
+                NSLog("Spoke: %@: a %ld-byte MIDI message did not fit a packet", name, msg.count)
+                return
+            }
             MIDIReceived(source, list)
         }
     }
@@ -68,9 +98,10 @@ final class MidiPort {
     private(set) var controller: MiniLab?
 
     func start(board h: BoardHandle, panel: MiniLab.Panel, onControllerChange: @escaping (String?) -> Void) {
-        let usb = MidiPortPair(name: "Model:Cycles", inject: { p, n in h.with { mcb_usb_midi_in($0, p, n) } },
+        // (a board that is gone takes everything: nothing waits for it)
+        let usb = MidiPortPair(name: "Model:Cycles", inject: { p, n in h.with { mcb_usb_midi_in($0, p, n) } ?? n },
                                drain: { p, n in h.with { mcb_usb_midi_out($0, p, n) } ?? 0 })
-        let trs = MidiPortPair(name: "Model:Cycles TRS", inject: { p, n in h.with { mcb_midi_in($0, p, n) } },
+        let trs = MidiPortPair(name: "Model:Cycles TRS", inject: { p, n in h.with { mcb_midi_in($0, p, n) } ?? n },
                                drain: { p, n in h.with { mcb_midi_out($0, p, n) } ?? 0 })
         pairs = [usb, trs]
         let lab = MiniLab(panel: panel, notes: trs, onChange: onControllerChange)
@@ -84,7 +115,7 @@ final class MidiPort {
         for p in pairs { p.create(client: client) }
         lab.attach(client: client, ownSources: pairs.map(\.source))
 
-        // MIDI OUT: drain the board every millisecond, so clock bytes keep their timing.
+        // Every millisecond: feed the board what waits, and drain its MIDI OUT, so clock bytes keep their timing.
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now(), repeating: .milliseconds(1), leeway: .microseconds(200))
         let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: 1024)
@@ -105,11 +136,13 @@ final class MidiPort {
 }
 
 /// Splits a MIDI byte stream into whole messages: expands running status, passes real-time bytes through on
-/// their own (even inside another message), and collects SysEx.
+/// their own (even inside another message), and collects SysEx: up to `sysexChunk` bytes at a time, so a long one
+/// goes on in pieces (as SysEx from hardware arrives) and never has to sit whole in memory.
 struct MidiStreamParser {
+    static let sysexChunk = 1024
     private var status: UInt8 = 0
     private var data: [UInt8] = []
-    private var sysex: [UInt8]?
+    private var sysex: [UInt8]?                                // in a SysEx: what has not gone on yet
 
     mutating func feed(_ byte: UInt8) -> [UInt8]? {
         if byte >= 0xF8 { return [byte] }
@@ -127,7 +160,12 @@ struct MidiStreamParser {
             if MidiStreamParser.length(byte) == 0 { status = 0; return [byte] }
             return nil
         }
-        if sysex != nil { sysex!.append(byte); return nil }
+        if sysex != nil {
+            sysex!.append(byte)
+            guard sysex!.count == MidiStreamParser.sysexChunk else { return nil }
+            defer { sysex = [] }
+            return sysex
+        }
         guard status != 0 else { return nil }
         data.append(byte)
         guard data.count == MidiStreamParser.length(status) else { return nil }

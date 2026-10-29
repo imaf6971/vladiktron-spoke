@@ -35,7 +35,7 @@ final class MiniLabTests: XCTestCase {
                                   nudge: { r.add("nudge \($0) \($1)") },
                                   pad: { r.add("pad \($0) \($1 > 0 ? "down" : "up")") },
                                   leds: { 0 })
-        let notes = MidiPortPair(name: "test", inject: { p, n in r.addMIDI(Array(UnsafeBufferPointer(start: p, count: n))) },
+        let notes = MidiPortPair(name: "test", inject: { p, n in r.addMIDI(Array(UnsafeBufferPointer(start: p, count: n))); return n },
                                  drain: { _, _ in 0 })
         lab = MiniLab(panel: panel, notes: notes, onChange: { _ in })
         lab.handle(MiniLab.sysex + [0x02, 0x00, 0x40, 0x62, 0x02, 0xF7])        // the MiniLab reports DAW mode

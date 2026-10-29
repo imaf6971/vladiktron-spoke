@@ -33,6 +33,16 @@ final class MidiStreamParserTests: XCTestCase {
         XCTAssertEqual(messages([0xF7, 0x90, 1, 2]), [[0x90, 1, 2]])               // a stray F7 is dropped
     }
 
+    /// Long SysEx goes on in pieces of at most `sysexChunk` bytes (CoreMIDI packets end at 64 KB, and a dump need not
+    /// sit whole in memory); together they are the message.
+    func testLongSysExGoesOnInPieces() {
+        let sysex: [UInt8] = [0xF0] + (0..<100_000).map { UInt8($0 & 0x7F) } + [0xF7]
+        let pieces = messages(sysex)
+        XCTAssertGreaterThan(pieces.count, 1)
+        XCTAssertTrue(pieces.allSatisfy { $0.count <= MidiStreamParser.sysexChunk }, "a piece is too long")
+        XCTAssertEqual(Array(pieces.joined()), sysex)
+    }
+
     func testDataWithoutStatusIsDropped() {
         XCTAssertEqual(messages([1, 2, 3]), [])
     }

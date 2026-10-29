@@ -25,7 +25,8 @@ practical. `./build.sh` is clean. `./test.sh` passes: `mcunit_test` with 14 chec
 | B1 Unicorn for macOS 14 | `50c36e3` | no linker warnings; Unicorn objects and the app binary say `minos 14.0`; `test.sh`, `mcusb_test`, `mcshutdown_test` pass. Not run on a real macOS 14 Mac. |
 | R1 audio after an output change | `91ea0f6`, `6ab9722` | new `AudioOutTests`: stopping the engine and posting `AVAudioEngineConfigurationChange` left it stopped before the fix, and it restarts now, off the main thread (it ran on it at first and froze the window for seconds); a stopped output stays stopped. Tried by hand: the sound follows a headphone plug and unplug. Unplug → Speakers takes ~50 ms. Plug-in → External Headphones takes 1.6–2.1 s, all inside `engine.start()` while macOS readies the new jack device; the same start takes 3–6 ms once it has settled, so that wait is the hardware, not the app |
 | R3 fault overlay with Restart | `8452ec2`, `4b2d59c` | `mcunit_test`: `mcb_fault` reports an unmapped access after `mcb_run` returns; `BoardProblemTests` (4). Scripted runs with snapshots: `SPOKE_TEST="6:halt,14:restart,26:quit"` showed "The Model:Cycles stopped", Restart booted it again and the quit was a clean power-off; a 1-byte flash.bin showed "could not start" with the board's message. Not covered: an OS that hangs without an exception |
-| R5 board use after free from MiniLab timers and MIDI | (this commit) | `BoardHandleTests` (3): calls stop at `close()`, `close()` waits for a call in progress, a MiniLab pad B1 tap's delayed release does nothing once closed. Scripted run: boot, Reset +Drive, halt, Restart, quit, all clean. The CoreMIDI callbacks go through the handle too, so their part of R5 is covered without having been reproduced |
+| R5 board use after free from MiniLab timers and MIDI | `da00662` | `BoardHandleTests` (3): calls stop at `close()`, `close()` waits for a call in progress, a MiniLab pad B1 tap's delayed release does nothing once closed. Scripted run: boot, Reset +Drive, halt, Restart, quit, all clean. The CoreMIDI callbacks go through the handle too, so their part of R5 is covered without having been reproduced |
+| R4 large MIDI input and SysEx out | (these commits) | `mcunit_test`: both ports take what fits and say so (a 20 KB SysEx arrives whole and in order over USB); `MidiPortPairTests` (2): a 20 KB SysEx waits and arrives whole, later messages wait behind it; `MidiStreamParserTests`: a 100 KB SysEx goes out in ≤ 1 KB pieces. With the OS (scratch test): 60 KB of SysEx into each port, all taken (USB 0.1 s; TRS 18 s at 31250 baud), and a note plays afterwards on both |
 
 Left from R11: `emmc_save_ext` (not atomic), `MidiStreamParser`'s unbounded SysEx (belongs with R4), and the
 `MiniLab.rescan` thread race. `README.md`'s Pieces table doesn't list `mcunit_test` yet: it had your
@@ -36,6 +37,10 @@ uncommitted edits, so I left it alone.
   Unicorn object: "built for newer 'macOS' version (27.0) than being linked (14.0)". `build.sh` doesn't pass
   `CMAKE_OSX_DEPLOYMENT_TARGET`, so Unicorn targets the build machine's OS. On an older macOS the app may fail to
   load or run. *Fix:* `-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0` in `build.sh` (and remove `build/unicorn` once).
+- **O1 — Low, to check on hardware. Notes on TRS lag behind a long SysEx.** The OS works through SysEx from the
+  jacks a little slower than they deliver it: after 4 KB a note waits about 3 s; after 60 KB (18 s at 31250 baud),
+  about 4 s. It always recovers, and USB shows no lag. Whether a real Model:Cycles lags the same is unknown;
+  Elektron Transfer and SysEx dumps over USB are not affected.
 - **T6 — Low. `mcusb_test`'s playback check is flaky under load.** It failed 2 of 9 runs while your app was
   running; the committed code and the new code each passed 3 of 3 back to back. It's wall-clock bound; RELEASE.md notes
   the same after builds.
@@ -147,7 +152,7 @@ only when there is no screen image, in 6 pt type (`PanelView.swift:150-155`). Th
 thread finishing, or `mcb_os_exceptions > 0`) in `refresh()`, and show an overlay with the reason and a "Restart"
 button that runs the existing `restart(changing:)` with no change.
 
-**R4 — Medium, M. Large MIDI input is dropped silently (SysEx restore over either port).**
+**[done, see Progress] R4 — Medium, M. Large MIDI input is dropped silently (SysEx restore over either port).**
 - TRS: `mcb_midi_in` (`mcboard.c:1753-1757`) drops any byte that doesn't fit its 4 KB ring. That ring drains at
   31,250 baud (3 KB/s), while a CoreMIDI client can deliver a whole dump in one callback.
 - USB: `usb_event` (`mcboard.c:1427-1433`) drops packets past 4,096 events (~12 KB of SysEx). The host moves at
