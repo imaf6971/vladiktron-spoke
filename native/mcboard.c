@@ -971,10 +971,21 @@ static void dma_irq_line(mcboard *b, int ch) {
     else if (ch >= 16) set_line(b, 1, 8 + (ch - 16), (b->dma_int >> ch) & 1);
     else set_line(b, 0, 8 + ch, (b->dma_int >> ch) & 1);
 }
+// DDR (both mirrors) and SRAM are plain host memory: DMA reads and writes them directly. Going through
+// uc_mem_read/uc_mem_write for every 4 bytes was ~10 % of the CPU thread's busy time (the OS's mixer copies,
+// channels 30 and 42, make ~50,000 transfers a second while playing). Neither way drops code translated from the
+// written bytes (Unicorn's invalidate_and_set_dirty is empty); the OS does not DMA over its own code.
+static uint8_t *ram_ptr(mcboard *b, uint32_t a, int n) {
+    if (a >= 0x40000000u && a < 0x50000000u && (a & (DDR_SIZE - 1)) + (uint32_t)n <= DDR_SIZE) return b->ddr + (a & (DDR_SIZE - 1));
+    if (a >= 0x80000000u && a - 0x80000000u + (uint32_t)n <= 0x10000u) return b->sram + (a - 0x80000000u);
+    return NULL;
+}
 static uint32_t bus_read(mcboard *b, uint32_t a, int n) {
     if ((a >> 24) == 0xEC || (a >> 24) == 0xFC) return (uint32_t)mmio_read(b->uc, a & 0xFFFFFF, (unsigned)n, mmio_ctx[(a >> 24) == 0xFC]);
     uint8_t t[4] = {0};
-    uc_mem_read(b->uc, a, t, (size_t)n);
+    const uint8_t *p = ram_ptr(b, a, n);
+    if (p) memcpy(t, p, (size_t)n);
+    else uc_mem_read(b->uc, a, t, (size_t)n);
     uint32_t v = 0;
     for (int i = 0; i < n; i++) v = v << 8 | t[i];
     return v;
@@ -983,7 +994,9 @@ static void bus_write(mcboard *b, uint32_t a, int n, uint32_t v) {
     if ((a >> 24) == 0xEC || (a >> 24) == 0xFC) { mmio_write(b->uc, a & 0xFFFFFF, (unsigned)n, v, mmio_ctx[(a >> 24) == 0xFC]); return; }
     uint8_t t[4];
     for (int i = 0; i < n; i++) t[i] = (uint8_t)(v >> (8 * (n - 1 - i)));
-    uc_mem_write(b->uc, a, t, (size_t)n);
+    uint8_t *p = ram_ptr(b, a, n);
+    if (p) memcpy(p, t, (size_t)n);
+    else uc_mem_write(b->uc, a, t, (size_t)n);
 }
 static uint32_t modulo_add(uint32_t a, int32_t off, int mod) {
     if (!mod) return a + (uint32_t)off;
