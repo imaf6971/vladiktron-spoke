@@ -2,8 +2,9 @@
 
 Accumulators hold the exact value: fractional mode in units of 2^-39 (Q62 product floored to 8 bits under the
 32-bit LSB, then >> 23), integer mode in units of 1. No accumulator saturation (emac.py has none).
-MACSR bits: 0x80 OMC, 0x40 unsigned, 0x20 fractional, 0x10 round. The mode is read at run time, never at
-translate time, so cached code stays correct when MACSR changes.
+MACSR bits: 0x80 OMC, 0x40 unsigned, 0x20 fractional, 0x10 round. The helpers read the mode at run time; the
+multiply-accumulate itself is translated for the mode of its block (the last step below), which is part of the
+block's key, and a write to MACSR ends the block, so cached code stays correct when MACSR changes.
 """
 import pathlib, re, sys
 root = pathlib.Path(sys.argv[1]) / 'qemu/target/m68k'
@@ -599,3 +600,137 @@ if 'board_ilimit = UINT64_MAX' not in s:
     s = s.replace(old, old + '        uc->board_ilimit = UINT64_MAX;   /* Model:Cycles board: no budget (patch_unicorn.py) */\n', 1)
     (pathlib.Path(sys.argv[1]) / 'uc.c').write_text(s)
 print('patched instruction budget')
+
+# --- EMAC multiply-accumulate as TCG ops (speed). HELPER(cfmac) above cost ~13 % of the CPU thread's busy time:
+#     a call per MAC, and since the accumulators are TCG globals, every live guest register spilled before it and
+#     reloaded after. The mode bits it read from MACSR at run time (SU, FI) are part of each block's key
+#     (cpu_get_tb_cpu_state: TB_FLAGS_MACSR), so the block can be translated for its mode instead, as long as a
+#     write to MACSR ends the block (upstream QEMU does the same). Results are the helper's exactly; mcemac_test
+#     checks that against a copy of the helper. The helper stays as that reference.
+t = root / 'translate.c'
+s = t.read_text()
+if 'gen_cfmac_inline' not in s:
+    old = '''    {
+        TCGv tf = tcg_const_i32(tcg_ctx, f);
+        gen_helper_cfmac(tcg_ctx, tcg_ctx->cpu_env, rx, ry, tf);
+        tcg_temp_free(tcg_ctx, tf);
+    }
+'''
+    assert old in s
+    s = s.replace(old, '''    gen_cfmac_inline(s, rx, ry, f);
+''', 1)
+    old = 'DISAS_INSN(mac)\n'
+    s = s.replace(old, r'''/* Model:Cycles board: HELPER(cfmac) as TCG ops, for the MACSR mode this block was translated in (see
+   patch_unicorn.py). Products are exact in 64 bits: word operands give at most 32 bits (fractional: shifted left,
+   nothing lost); long operands 64 (muls2/mulu2), where "* 2 then >> 23" is the same as ">> 22", and so on. */
+static void gen_cfmac_inline(DisasContext *s, TCGv rx, TCGv ry, uint32_t f)
+{
+    TCGContext *tcg_ctx = s->uc->tcg_ctx;
+    int uns = (s->base.tb->flags & TB_FLAGS_MACSR) & (MACSR_SU >> 4);
+    int frac = (s->base.tb->flags & TB_FLAGS_MACSR) & (MACSR_FI >> 4);
+    int scale = (f >> 6) & 3;                       /* 1: * 2, 3: >> 1 (floor), else none */
+    TCGv_i64 q = tcg_temp_new_i64(tcg_ctx);
+    if (f & 8) {
+        TCGv x = tcg_temp_new(tcg_ctx), y = tcg_temp_new(tcg_ctx);
+        if (f & 0x10) {
+            tcg_gen_shri_i32(tcg_ctx, x, rx, 16);
+        } else {
+            tcg_gen_mov_i32(tcg_ctx, x, rx);
+        }
+        if (f & 0x20) {
+            tcg_gen_shri_i32(tcg_ctx, y, ry, 16);
+        } else {
+            tcg_gen_mov_i32(tcg_ctx, y, ry);
+        }
+        if (uns) {
+            tcg_gen_ext16u_i32(tcg_ctx, x, x);
+            tcg_gen_ext16u_i32(tcg_ctx, y, y);
+        } else {
+            tcg_gen_ext16s_i32(tcg_ctx, x, x);
+            tcg_gen_ext16s_i32(tcg_ctx, y, y);
+        }
+        tcg_gen_mul_i32(tcg_ctx, x, x, y);          /* fits: signed 16x16, or unsigned below 2^32 */
+        if (uns) {
+            tcg_gen_extu_i32_i64(tcg_ctx, q, x);
+        } else {
+            tcg_gen_ext_i32_i64(tcg_ctx, q, x);
+        }
+        tcg_temp_free(tcg_ctx, x);
+        tcg_temp_free(tcg_ctx, y);
+        if (frac) {                                 /* p << 32, scaled, >> 23 */
+            tcg_gen_shli_i64(tcg_ctx, q, q, scale == 1 ? 10 : scale == 3 ? 8 : 9);
+        } else if (scale == 1) {
+            tcg_gen_shli_i64(tcg_ctx, q, q, 1);
+        } else if (scale == 3) {
+            tcg_gen_sari_i64(tcg_ctx, q, q, 1);     /* (unsigned products are >= 0 here) */
+        }
+    } else {
+        TCGv lo = tcg_temp_new(tcg_ctx), hi = tcg_temp_new(tcg_ctx);
+        if (uns) {
+            tcg_gen_mulu2_i32(tcg_ctx, lo, hi, rx, ry);
+        } else {
+            tcg_gen_muls2_i32(tcg_ctx, lo, hi, rx, ry);
+        }
+        tcg_gen_concat_i32_i64(tcg_ctx, q, lo, hi);
+        tcg_temp_free(tcg_ctx, lo);
+        tcg_temp_free(tcg_ctx, hi);
+        if (frac) {
+            int k = scale == 1 ? 22 : scale == 3 ? 24 : 23;
+            if (uns) {
+                tcg_gen_shri_i64(tcg_ctx, q, q, k);
+            } else {
+                tcg_gen_sari_i64(tcg_ctx, q, q, k);
+            }
+        } else if (scale == 1) {
+            tcg_gen_shli_i64(tcg_ctx, q, q, 1);
+        } else if (scale == 3) {
+            if (uns) {
+                tcg_gen_shri_i64(tcg_ctx, q, q, 1);
+            } else {
+                tcg_gen_sari_i64(tcg_ctx, q, q, 1);
+            }
+        }
+    }
+    if (f & 4) {
+        tcg_gen_sub_i64(tcg_ctx, MACREG(f & 3), MACREG(f & 3), q);
+    } else {
+        tcg_gen_add_i64(tcg_ctx, MACREG(f & 3), MACREG(f & 3), q);
+    }
+    if (f & 0x100) {
+        int a2 = (f >> 9) & 3;
+        if (f & 0x800) {
+            tcg_gen_sub_i64(tcg_ctx, MACREG(a2), MACREG(a2), q);
+        } else {
+            tcg_gen_add_i64(tcg_ctx, MACREG(a2), MACREG(a2), q);
+        }
+    }
+    tcg_temp_free_i64(tcg_ctx, q);
+}
+
+DISAS_INSN(mac)
+''', 1)
+    old = '''    tcg_gen_andi_i32(tcg_ctx, QREG_MACSR, val, 0xff);
+}
+'''
+    assert old in s
+    s = s.replace(old, '''    tcg_gen_andi_i32(tcg_ctx, QREG_MACSR, val, 0xff);
+    gen_exit_tb(s);   /* Model:Cycles board: the mode is part of the block's key (gen_cfmac_inline) */
+}
+''', 1)
+    t.write_text(s)
+s = uu.read_text()
+if 'uc_m68k_macc' not in s:
+    s += '''
+/* Model:Cycles board: an EMAC accumulator's exact value, for tests (mcemac_test). Call between runs. */
+int64_t uc_m68k_macc(uc_engine *uc, int acc)
+{
+    return M68K_CPU(uc->cpu)->env.macc[acc & 3];
+}
+
+void uc_m68k_set_macc(uc_engine *uc, int acc, int64_t value)
+{
+    M68K_CPU(uc->cpu)->env.macc[acc & 3] = value;
+}
+'''
+    uu.write_text(s)
+print('patched inline EMAC')

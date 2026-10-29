@@ -1,5 +1,5 @@
 # Builds everything and runs the checks that need no firmware (the Model:Cycles OS is each user's own and is never
-# in this repository): mcunit_test (the board's own logic), mcfirmware_test (the OS file decoder with made-up files)
+# in this repository): mcunit_test (the board's own logic), mcemac_test (the JIT's multiply-accumulate), mcfirmware_test (the OS file decoder with made-up files)
 # and swift test (MiniLab mapping, MIDI, audio output). The board tests that boot the OS run on a developer's Mac.
 name: CI
 

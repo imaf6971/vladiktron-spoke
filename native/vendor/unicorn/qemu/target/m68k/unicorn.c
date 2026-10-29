@@ -292,3 +292,14 @@ void uc_m68k_set_ilimit(uc_engine *uc, uint64_t limit)
 {
     uc->board_ilimit = limit;
 }
+
+/* Model:Cycles board: an EMAC accumulator's exact value, for tests (mcemac_test). Call between runs. */
+int64_t uc_m68k_macc(uc_engine *uc, int acc)
+{
+    return M68K_CPU(uc->cpu)->env.macc[acc & 3];
+}
+
+void uc_m68k_set_macc(uc_engine *uc, int acc, int64_t value)
+{
+    M68K_CPU(uc->cpu)->env.macc[acc & 3] = value;
+}
