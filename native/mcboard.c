@@ -932,7 +932,7 @@ static void dma_irq_line(mcboard *b, int ch) {
     else set_line(b, 0, 8 + ch, (b->dma_int >> ch) & 1);
 }
 static uint32_t bus_read(mcboard *b, uint32_t a, int n) {
-    if ((a >> 24) == 0xEC || (a >> 24) == 0xFC) return mmio_read(b->uc, a & 0xFFFFFF, (unsigned)n, mmio_ctx[(a >> 24) == 0xFC]);
+    if ((a >> 24) == 0xEC || (a >> 24) == 0xFC) return (uint32_t)mmio_read(b->uc, a & 0xFFFFFF, (unsigned)n, mmio_ctx[(a >> 24) == 0xFC]);
     uint8_t t[4] = {0};
     uc_mem_read(b->uc, a, t, (size_t)n);
     uint32_t v = 0;
