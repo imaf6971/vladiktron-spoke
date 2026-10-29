@@ -14,7 +14,8 @@ struct AudioDevice: Hashable, Identifiable {
 }
 
 enum AudioDevices {
-    /// Devices with input (or output) channels, by name.
+    /// Devices with input (or output) channels, by name; not the aggregate device Core Audio makes for each
+    /// audio engine on the default output (CADefaultDeviceAggregate-…), which comes and goes with the engine.
     static func list(input: Bool) -> [AudioDevice] {
         var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
                                               mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
@@ -24,6 +25,7 @@ enum AudioDevices {
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &ids) == noErr else { return [] }
         return ids.compactMap { id -> AudioDevice? in
             guard channels(id, input: input) > 0, let uid = string(id, kAudioDevicePropertyDeviceUID),
+                  !uid.hasPrefix("CADefaultDeviceAggregate"),
                   let name = string(id, kAudioObjectPropertyName) else { return nil }
             return AudioDevice(id: id, uid: uid, name: name)
         }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }

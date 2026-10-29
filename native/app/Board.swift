@@ -1,5 +1,7 @@
 // Bridge to the C virtual board (mcboard.h): runs the OS on its own thread, publishes screen + LEDs.
 import AppKit
+import Combine
+import CoreAudio
 import MCBoard
 import SwiftUI
 
@@ -44,6 +46,15 @@ final class Board: ObservableObject, @unchecked Sendable {
     @Published var needsFirmware = false                // no OS installed yet: the panel asks for the .syx
     @Published var usbState: Int32 = 0                  // mcb_usb_state
     @Published var controller: String?                  // connected MIDI controller (MiniLab 3)
+    /// Where the main output plays (an output device's UID; nil: the system's default output, followed when it
+    /// changes). Set in Settings. A chosen device that is not plugged in plays on the default until it comes back.
+    @Published var mainOutputUID: String? = UserDefaults.standard.string(forKey: "mainOut") {
+        didSet {
+            guard mainOutputUID != oldValue else { return }
+            UserDefaults.standard.set(mainOutputUID, forKey: "mainOut")
+            routeMainOutput()
+        }
+    }
 
     private var board: OpaquePointer?
     private var handle: BoardHandle?                    // the board for MIDI and MiniLab calls (closed before destroy)
@@ -51,6 +62,8 @@ final class Board: ObservableObject, @unchecked Sendable {
     private var activity: NSObjectProtocol?             // keeps App Nap away while the board runs
     private var timer: Timer?
     private var audio: AudioOut?
+    private var audioDevice: AudioDeviceID?             // the device `audio` was started on (nil: the default)
+    private var outputsChanged: AnyCancellable?         // the output list changed: the chosen device came or went
     let usbAudio = UsbAudio()                           // USB audio routes (the USB Audio menu)
     private let midi = MidiPort()
     private var lastGen: UInt64 = 0
@@ -109,12 +122,12 @@ final class Board: ObservableObject, @unchecked Sendable {
         t.qualityOfService = .userInteractive
         t.start()
         thread = t
-        let main = AudioOut(name: "main", read: { mcb_audio(b, $0, $1) }, available: { mcb_audio_available(b) })
-        main.onProblem = { [weak self] p in DispatchQueue.main.async { self?.setNotice("main", p.map { Notice(text: $0) }) } }
         usbAudio.onNotice = { [weak self] key, n in DispatchQueue.main.async { self?.setNotice(key, n) } }
-        main.start()
-        audio = main
-        usbAudio.start(board: b)
+        usbAudio.start(board: b)                            // (lists the outputs the main output is chosen from)
+        routeMainOutput()
+        outputsChanged = usbAudio.$outputs.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] _ in
+            self?.routeMainOutput()
+        }
         let h = BoardHandle(b)                              // MiniLab timers may fire after the board is gone
         handle = h
         let panel = MiniLab.Panel(key: { k, down in h.with { mcb_key($0, Int32(k), down ? 1 : 0) } },
@@ -162,6 +175,21 @@ final class Board: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// (Re)starts the main output on the device chosen in Settings, if it is plugged in, else on the default. Does
+    /// nothing if that is where it plays already.
+    private func routeMainOutput() {
+        guard let b = board else { return }
+        let device = mainOutputUID.flatMap { uid in AudioDevices.list(input: false).first { $0.uid == uid }?.id }
+        if audio != nil && device == audioDevice { return }
+        audio?.stop()
+        setNotice("main", nil)
+        let main = AudioOut(name: "main", read: { mcb_audio(b, $0, $1) }, available: { mcb_audio_available(b) })
+        main.onProblem = { [weak self] p in DispatchQueue.main.async { self?.setNotice("main", p.map { Notice(text: $0) }) } }
+        main.start(device: device)
+        audio = main
+        audioDevice = device
+    }
+
     var running: Bool { board != nil }
     private var shuttingDown = false
     private var afterShutdown: [() -> Void] = []        // `done` of every shutDown asked for while one runs
@@ -197,8 +225,10 @@ final class Board: ObservableObject, @unchecked Sendable {
         guard let b = board else { return }
         timer?.invalidate()
         timer = nil
+        outputsChanged = nil
         audio?.stop()
         audio = nil
+        audioDevice = nil
         usbAudio.stop()
         midi.stop()
         _ = handle?.close()                                 // MIDI and MiniLab calls from now on do nothing

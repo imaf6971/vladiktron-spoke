@@ -170,6 +170,7 @@ struct SpokeApp: App {
             }
             CommandMenu("USB Audio") { UsbAudioMenu(usb: delegate.board.usbAudio) }
         }
+        Settings { SettingsView(board: delegate.board, usb: delegate.board.usbAudio, app: delegate) }
     }
 }
 
