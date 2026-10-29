@@ -1719,6 +1719,10 @@ void mcb_power_key(mcboard *b, int down) { atomic_store(&b->power_key, down ? 1 
 int mcb_powered_off(mcboard *b) { return atomic_load(&b->powered_off); }
 uint64_t mcb_emmc_errors(mcboard *b) { return b->n_emmc_err; }
 uint64_t mcb_os_exceptions(mcboard *b) { return atomic_load(&b->n_os_exceptions); }
+int mcb_fault(mcboard *b, char *out, size_t len) {
+    if (len) snprintf(out, len, "%s", b->fault);
+    return b->fault[0] != 0;
+}
 
 int mcb_peek(mcboard *b, uint32_t addr, void *out, size_t n) {
     if (addr < 0x40000000u || (uint64_t)addr - 0x40000000u + n > DDR_SIZE) return -1;

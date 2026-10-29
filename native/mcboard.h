@@ -36,6 +36,10 @@ int mcb_powered_off(mcboard *b);
 uint64_t mcb_emmc_errors(mcboard *b);
 // CPU exceptions the OS took (its handler prints "EXCEPTION ..." and halts: the OS is dead). 0 is healthy.
 uint64_t mcb_os_exceptions(mcboard *b);
+// Whether the emulated CPU has stopped on a fault (an unmapped access, an emulator error): 1, with the reason in
+// `out` (also in mcb_status); 0 and an empty `out` if not. Read it once mcb_run has returned (it is written by the
+// CPU thread). mcb_run then returns nonzero, and the board cannot run on: destroy it and create a new one.
+int mcb_fault(mcboard *b, char *out, size_t len);
 // For tests, between mcb_run calls on the same thread: copy n bytes of DDR at addr (-1 outside DDR), and read DMA
 // timer n's counter as the OS would.
 int mcb_peek(mcboard *b, uint32_t addr, void *out, size_t n);

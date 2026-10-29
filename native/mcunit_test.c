@@ -125,6 +125,24 @@ static void test_unmapped_access(void) {
     mcb_destroy(b);
 }
 
+// mcb_fault says why the CPU stopped, once mcb_run has returned; a healthy board has no fault.
+static void test_fault_report(void) {
+    uint8_t os[0x100] = {0};
+    static const uint8_t code[] = {0x20, 0x39, 0x20, 0x00, 0x00, 0x00};   // move.l (0x20000000).l,d0
+    char err[256], why[256] = "untouched";
+    mcboard *b = create(MCB_FLASH_SIZE, err, sizeof err);
+    if (!b) { check(0, err); return; }
+    check(mcb_fault(b, why, sizeof why) == 0 && why[0] == 0, "a board that has not faulted reports no fault");
+    mcb_destroy(b);
+    memcpy(os + (OS_ENTRY - OS_BASE), code, sizeof code);
+    b = create_os(os, sizeof os, MCB_FLASH_SIZE, err, sizeof err);
+    if (!b) { check(0, err); return; }
+    int r = mcb_run(b, 0.5);
+    check(r != 0 && mcb_fault(b, why, sizeof why) == 1 && strstr(why, "unmapped access 0x20000000"),
+          "after a CPU fault mcb_run returns nonzero and mcb_fault says why");
+    mcb_destroy(b);
+}
+
 // A playback microframe never writes more than its packet buffer holds, whatever the OS's dTD and the backlog.
 static void test_usb_play_packet_bound(void) {
     char err[256];
@@ -154,6 +172,7 @@ int main(void) {
     test_usb_midi_parser();
     test_unmapped_access();
     test_usb_play_packet_bound();
+    test_fault_report();
     char p[600];
     static const char *names[] = {"flash.bin", "emmc.img", "emmc.img.extcsd"};
     for (int i = 0; i < 3; i++) { path(p, sizeof p, names[i]); unlink(p); }
