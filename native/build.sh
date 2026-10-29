@@ -3,7 +3,7 @@
 #   ./build.sh [path/to/model-cycles_OS1.13.syx]
 # Needs: CMake and the Xcode command line tools (clang, make, swift).
 # Produces: ./mcinstall, ./mcbench, ./mcboot, ./mcaudio_test, ./mcmidi_test, ./mcusb_test, ./mcshutdown_test, ./mcrt_test,
-#           ./mctiming_test, ./mcunit_test
+#           ./mctiming_test, ./mcunit_test, ./mcfirmware_test
 #           and build/Vladiktron Spoke.app, signed with the hardened runtime: ad hoc, or with SIGN_ID="Developer ID
 #           Application: ..." for distribution. If the .syx is there, also build/main_os.bin + build/flash.bin (for the
 #           command-line tools), and installs the firmware into ~/Library/Application Support/Vladiktron Spoke as the
@@ -28,6 +28,7 @@ cmake --build build/unicorn -j "$JOBS" > build/unicorn-build.log 2>&1
 
 # 2. Firmware: decode your .syx (mcfirmware.c, as the app does)
 cc -O2 -Wall -Wextra mcfirmware.c mcinstall.c -o mcinstall
+cc -O2 -Wall -Wextra mcfirmware_test.c -o mcfirmware_test   # includes mcfirmware.c itself
 if [ -f "$SYX" ]; then
     rm -rf build/fw
     ./mcinstall "$SYX" build/fw
