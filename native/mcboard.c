@@ -233,6 +233,9 @@ struct mcboard {
     uint64_t n_irq[256], n_cmd, n_rd, n_wr, n_erase, n_emmc_err, n_flash_saves;
 };
 
+// The board's time (us since boot): every hardware model reads it here.
+static double board_time(mcboard *b) { return now_us() - b->t0; }
+
 static uint8_t *io_ptr(mcboard *b, uint32_t a) {
     return (a >> 24) == 0xEC ? &b->io_ec[a & 0xFFFFFF] : &b->io_fc[a & 0xFFFFFF];
 }
@@ -322,7 +325,7 @@ static void dtim_program(mcboard *b, int n, double t) {
 static uint32_t dtim_count(mcboard *b, int n) {
     uint32_t mode = io_get(b, 0xFC070000u + 0x4000u * (uint32_t)n, 2);
     double mhz = dtim_mhz(mode) > 0 ? dtim_mhz(mode) : DTIM_CLOCK_MHZ;
-    double t = now_us() - b->t0;
+    double t = board_time(b);
     if (n == 2) {
         uint32_t pc;
         b->rt.dtim2++;
@@ -730,7 +733,7 @@ static void mmio_write(uc_engine *uc, uint64_t off, unsigned size, uint64_t valu
     uint32_t v = (uint32_t)value;
     (void)uc;
     io_set(b, a, size, v);
-    double t = now_us() - b->t0;
+    double t = board_time(b);
     if (size == 1 && a >= 0xEC094000u && a < 0xEC09400Cu) b->gpio_out[a - 0xEC094000u] = v;
     else if (size == 1 && a >= 0xEC094018u && a < 0xEC094024u) b->gpio_out[a - 0xEC094018u] |= v;
     else if (size == 1 && a >= 0xEC094024u && a < 0xEC094030u) b->gpio_out[a - 0xEC094024u] &= v;
@@ -870,7 +873,7 @@ static void fp_write(uc_engine *uc, uint64_t off, unsigned size, uint64_t value,
 static void on_render_done(uc_engine *uc, uint64_t addr, uint32_t size, void *user) {
     mcboard *b = user;
     (void)uc; (void)addr; (void)size;
-    double t = now_us() - b->t0;
+    double t = board_time(b);
     usb_microframes(b, t, 0);                               // USB audio packets, as evenly as the audio blocks
     dma50_check(b, t);
     usb_microframes(b, t, 0);
@@ -1120,7 +1123,7 @@ static uint32_t usb_reg_read(mcboard *b, uint32_t o) {
     case 0x080: case 0x088: return b->usb.gpt_ld[(o - 0x80) / 8];
     case 0x084: case 0x08C: {
         int n = (o - 0x84) / 8;
-        double left = b->usb.gpt_due[n] ? b->usb.gpt_due[n] - (now_us() - b->t0) : 0;
+        double left = b->usb.gpt_due[n] ? b->usb.gpt_due[n] - board_time(b) : 0;
         return (b->usb.gpt_ctrl[n] & 0xFF000000u) | ((uint32_t)(left > 0 ? left : 0) & 0xFFFFFF);
     }
     case 0x140: return b->usb.cmd;
@@ -1153,7 +1156,7 @@ static void usb_reg_write(mcboard *b, uint32_t o, uint32_t v) {
         int n = (o - 0x84) / 8;
         b->usb.gpt_ctrl[n] = v & ~0x40000000u;
         if (!(v & 0x80000000u)) b->usb.gpt_due[n] = 0;
-        else if ((v & 0x40000000u) || !b->usb.gpt_due[n]) b->usb.gpt_due[n] = now_us() - b->t0 + b->usb.gpt_ld[n] + 1.0;
+        else if ((v & 0x40000000u) || !b->usb.gpt_due[n]) b->usb.gpt_due[n] = board_time(b) + b->usb.gpt_ld[n] + 1.0;
         return;
     }
     case 0x140: {
@@ -1161,7 +1164,7 @@ static void usb_reg_write(mcboard *b, uint32_t o, uint32_t v) {
         if (v & 2) { usb_reset_controller(b); v &= ~2u; }    // RST self-clears
         b->usb.cmd = v;
         if (!was && (v & 1)) {                               // run: the host sees the pull-up
-            b->usb.t_run = now_us() - b->t0;
+            b->usb.t_run = board_time(b);
             b->usb.uframe = 0;
             b->usb.cap_alt = b->usb.play_alt = 0;
             if (b->usb.vbus && b->usb.connect) { b->usb.state = USB_RESET; b->usb.step = 0; b->usb.due = b->usb.t_run + 100000; }
@@ -1643,9 +1646,9 @@ static double next_event(mcboard *b, double t, double cap) {
 static void idle_sleep(mcboard *b, uint32_t sr) {
     if (b->irq_level > (int)((sr >> 8) & 7) || atomic_load(&b->stop)) return;
     double most = b->usb.cap_alt || b->usb.play_alt ? SLICE_USB_US : IDLE_MAX_US;
-    double t = now_us() - b->t0, d = next_event(b, t, most);
+    double t = board_time(b), d = next_event(b, t, most);
     if (d < t + IDLE_MIN_US) d = t + (IDLE_MIN_US < most ? IDLE_MIN_US : most);
-    double us = d - (now_us() - b->t0);
+    double us = d - board_time(b);
     if (us < 20) return;
     struct timespec ts = { 0, (long)(us * 1000) };
     nanosleep(&ts, NULL);
@@ -1686,7 +1689,7 @@ static void on_exception(uc_engine *uc, uint64_t addr, uint32_t size, void *user
     if (uc_mem_read(uc, frame, raw, 16) == UC_ERR_OK)
         for (int i = 0; i < 4; i++) w[i] = (uint32_t)raw[4*i] << 24 | raw[4*i+1] << 16 | raw[4*i+2] << 8 | raw[4*i+3];
     fprintf(stderr, "mcboard: OS EXCEPTION vector %u (frame %08x: %08x %08x %08x %08x) t=%.3f s\n",
-            (w[0] >> 18) & 0xFF, frame, w[0], w[1], w[2], w[3], (now_us() - b->t0) / 1e6);
+            (w[0] >> 18) & 0xFF, frame, w[0], w[1], w[2], w[3], board_time(b) / 1e6);
     uint32_t r[16];
     for (int i = 0; i < 8; i++) { uc_reg_read(uc, UC_M68K_REG_D0 + i, &r[i]); uc_reg_read(uc, UC_M68K_REG_A0 + i, &r[8 + i]); }
     fprintf(stderr, "  d0-7 %08x %08x %08x %08x %08x %08x %08x %08x\n  a0-7 %08x %08x %08x %08x %08x %08x %08x %08x\n",
@@ -1729,7 +1732,7 @@ int mcb_run(mcboard *b, double seconds) {
             break;
         }
         if (b->idle) { b->idle = 0; idle_sleep(b, sr); hang_idle(b); }
-        double t = now_us() - b->t0;
+        double t = board_time(b);
         hang_check(b, t, pc, sr);
         timers_service(b, t);
         dma50_check(b, t);
@@ -1955,7 +1958,7 @@ uint64_t mcb_screen(mcboard *b, uint8_t out[1024]) {
 void mcb_status(mcboard *b, char *out, size_t len) {
     uint32_t pc = atomic_load(&b->last_pc), sr = atomic_load(&b->last_sr);
     snprintf(out, len, "t=%.1fs pc=%08x sr=%04x audio blocks=%llu midi in/out=%llu/%llu usb=%d (midi %llu/%llu, audio out/in %llu/%llu, short %llu, fb %.4f) panel reads=%llu irq=L%d/v%d emmc: %llu cmds, %llu read, %llu written, %llu erases, %llu errors%s%s%s",
-             (now_us() - b->t0) / 1e6, pc, sr & 0xFFFF, (unsigned long long)b->n_blocks, (unsigned long long)b->n_midi_in, (unsigned long long)b->n_midi_out, mcb_usb_state(b), (unsigned long long)b->usb.n_in, (unsigned long long)b->usb.n_out,
+             board_time(b) / 1e6, pc, sr & 0xFFFF, (unsigned long long)b->n_blocks, (unsigned long long)b->n_midi_in, (unsigned long long)b->n_midi_out, mcb_usb_state(b), (unsigned long long)b->usb.n_in, (unsigned long long)b->usb.n_out,
              (unsigned long long)b->usb.n_cap, (unsigned long long)b->usb.n_play, (unsigned long long)b->usb.n_play_short, b->usb.fb, (unsigned long long)b->n_fp_reads, b->irq_level, b->irq_vector,
              (unsigned long long)b->n_cmd, (unsigned long long)b->n_rd, (unsigned long long)b->n_wr,
              (unsigned long long)b->n_erase, (unsigned long long)b->n_emmc_err, atomic_load(&b->powered_off) ? " POWERED OFF" : "",
