@@ -9,7 +9,7 @@ without fetching anything, and so this repository is the complete source the GPL
 Left out, since the build does not use them: `bindings/`, `docs/`, `tests/`, `samples/`, `msvc/`.
 
 **Modified** by this project (2026-10, Миронов Владислав Андреевич) for the ColdFire CPU of the Model:Cycles:
-the EMAC unit, QEMU's own exceptions, IRQ lines, safe stops, the m68k SR read, and speed (stores to RAM pages without
+the EMAC unit, QEMU's own exceptions, IRQ lines, safe stops, the m68k SR read, an instruction budget, and speed (stores to RAM pages without
 code take the fast path, the JIT stays executable for a whole run). `../patch_unicorn.py` makes these changes to a
 stock 2.1.4 and explains each one; `unicorn-2.1.4.patch` is the resulting diff. The files here already have them
 applied (running the script on them again changes nothing).

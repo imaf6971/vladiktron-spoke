@@ -1,3 +1,16 @@
+diff --git a/include/uc_priv.h b/include/uc_priv.h
+index c3132dc..bc74552 100644
+--- a/include/uc_priv.h
++++ b/include/uc_priv.h
+@@ -416,6 +416,8 @@ struct uc_struct {
+ 
+     sigjmp_buf jmp_bufs[UC_MAX_NESTED_LEVEL]; // To support nested uc_emu_start
+     int nested_level;                         // Current nested_level
++    uint64_t board_icount, board_ilimit; // Model:Cycles board: instructions run, and where the run stops
++                                         // (patch_unicorn.py)
+ 
+     struct TranslationBlock *last_tb; // The real last tb we executed.
+ 
 diff --git a/qemu/accel/tcg/cpu-exec-common.c b/qemu/accel/tcg/cpu-exec-common.c
 index f1110b4..39175ef 100644
 --- a/qemu/accel/tcg/cpu-exec-common.c
@@ -121,10 +134,22 @@ index 2425c7d..bc42634 100644
  
  CPUInterruptHandler cpu_interrupt_handler = tcg_handle_interrupt;
 diff --git a/qemu/accel/tcg/tcg-runtime.c b/qemu/accel/tcg/tcg-runtime.c
-index 777287a..a65b8eb 100644
+index 777287a..ad286db 100644
 --- a/qemu/accel/tcg/tcg-runtime.c
 +++ b/qemu/accel/tcg/tcg-runtime.c
-@@ -171,11 +171,7 @@ void HELPER(check_exit_request)(void *p, uint32_t in_delay_slot) {
+@@ -167,15 +167,19 @@ void HELPER(exit_atomic)(CPUArchState *env)
+ 
+ void HELPER(check_exit_request)(void *p, uint32_t in_delay_slot) {
+     uc_engine *uc = p;
++    /* Model:Cycles board: instruction budget (see patch_unicorn.py). Bit 0 is the delay-slot flag of the
++       architectures that have one; the rest is the block's instruction count. */
++    uint32_t insns = in_delay_slot >> 1;
++    in_delay_slot &= 1;
++    if (uc->board_icount >= uc->board_ilimit && !in_delay_slot) {
++        uc->stop_request = true;
++        cpu_exit(uc->cpu);
++    }
+ 
      if (cpu_loop_exit_requested(uc->cpu) && !in_delay_slot) {
          // There are stil something we have to before exiting to be compatible with previous behaviors
  
@@ -137,6 +162,13 @@ index 777287a..a65b8eb 100644
          uc->cpu->tcg_exit_req = 0;
  
          if (uc->skip_sync_pc_on_exit) {
+@@ -185,4 +189,5 @@ void HELPER(check_exit_request)(void *p, uint32_t in_delay_slot) {
+             cpu_loop_exit_restore(uc->cpu, GETPC());
+         }
+     }
++    uc->board_icount += insns;
+ }
+\ No newline at end of file
 diff --git a/qemu/accel/tcg/translate-all.c b/qemu/accel/tcg/translate-all.c
 index 71b6b2b..004395b 100644
 --- a/qemu/accel/tcg/translate-all.c
@@ -152,6 +184,35 @@ index 71b6b2b..004395b 100644
 +    PageDesc *p = page_find(uc, addr >> TARGET_PAGE_BITS);
 +    return p && p->first_tb;
 +}
+diff --git a/qemu/include/exec/gen-icount.h b/qemu/include/exec/gen-icount.h
+index 8b484cb..9d81d63 100644
+--- a/qemu/include/exec/gen-icount.h
++++ b/qemu/include/exec/gen-icount.h
+@@ -37,8 +37,13 @@ static inline void gen_tb_start(TCGContext *tcg_ctx, TranslationBlock *tb)
+     // Unicorn:
+     //    We CANT'T use brcondi_i32 here or we will fail liveness analysis
+     //    because it marks the end of BB
++    /* Model:Cycles board: without delay slots the argument carries the block's instruction count, filled in by
++       gen_tb_end (see patch_unicorn.py). */
++    tcg_ctx->board_insn_op = NULL;
+     if (tcg_ctx->delay_slot_flag != NULL) {
+         tcg_gen_mov_i32(tcg_ctx, tmp, tcg_ctx->delay_slot_flag);
++    } else {
++        tcg_ctx->board_insn_op = tcg_last_op(tcg_ctx);
+     }
+     gen_helper_check_exit_request(tcg_ctx, puc, tmp);
+     tcg_temp_free_i32(tcg_ctx, tmp);
+@@ -51,6 +56,10 @@ static inline void gen_tb_end(TCGContext *tcg_ctx, TranslationBlock *tb, int num
+         tcg_temp_free_i32(tcg_ctx, tcg_ctx->delay_slot_flag);
+     }
+     tcg_ctx->delay_slot_flag = NULL;
++    if (tcg_ctx->board_insn_op != NULL) {
++        tcg_set_insn_param(tcg_ctx->board_insn_op, 1, (TCGArg)num_insns << 1);
++        tcg_ctx->board_insn_op = NULL;
++    }
+     if (tb_cflags(tb) & CF_USE_ICOUNT) {
+         /* Update the num_insn immediate parameter now that we know
+          * the actual insn count.  */
 diff --git a/qemu/include/tcg/tcg-apple-jit.h b/qemu/include/tcg/tcg-apple-jit.h
 index 4ace2c7..219204d 100644
 --- a/qemu/include/tcg/tcg-apple-jit.h
@@ -167,6 +228,18 @@ index 4ace2c7..219204d 100644
      if (!pthread_jit_write_protect_supported_np()) {
          return;
      }
+diff --git a/qemu/include/tcg/tcg.h b/qemu/include/tcg/tcg.h
+index bbeb4b9..16ad1cc 100644
+--- a/qemu/include/tcg/tcg.h
++++ b/qemu/include/tcg/tcg.h
+@@ -690,6 +690,7 @@ struct TCGContext {
+     TBContext tb_ctx;
+     /* qemu/include/exec/gen-icount.h */
+     TCGOp *icount_start_insn;
++    TCGOp *board_insn_op;   /* Model:Cycles board: the block's instruction count (patch_unicorn.py) */
+     /* qemu/tcg/tcg.c */
+     GHashTable *helper_table;
+     GHashTable *custom_helper_infos; // To support inline hooks.
 diff --git a/qemu/softmmu/cpus.c b/qemu/softmmu/cpus.c
 index afb8bbe..4aef28f 100644
 --- a/qemu/softmmu/cpus.c
@@ -572,7 +645,7 @@ index 5b9a74c..a010d64 100644
  
  DISAS_INSN(to_mask)
 diff --git a/qemu/target/m68k/unicorn.c b/qemu/target/m68k/unicorn.c
-index 42ef1ff..fe06993 100644
+index 42ef1ff..bc13995 100644
 --- a/qemu/target/m68k/unicorn.c
 +++ b/qemu/target/m68k/unicorn.c
 @@ -72,7 +72,7 @@ uc_err reg_read(void *_env, int mode, unsigned int regid, void *value,
@@ -584,7 +657,7 @@ index 42ef1ff..fe06993 100644
              *(uint32_t *)value = cpu_m68k_get_sr(env);
              break;
          case UC_M68K_REG_CR_SFC:
-@@ -262,3 +262,21 @@ void uc_init(struct uc_struct *uc)
+@@ -262,3 +262,33 @@ void uc_init(struct uc_struct *uc)
      uc->cpu_context_size = offsetof(CPUM68KState, end_reset_fields);
      uc_common_init(uc);
  }
@@ -606,6 +679,18 @@ index 42ef1ff..fe06993 100644
 +        cpu_exit(uc->cpu);
 +    }
 +}
++
++/* Model:Cycles board: guest instructions run so far (charged a block at a time, when the block starts), and the
++   count at which the run stops (at the next block start; UINT64_MAX: never). Call from the CPU thread. */
++uint64_t uc_m68k_icount(uc_engine *uc)
++{
++    return uc->board_icount;
++}
++
++void uc_m68k_set_ilimit(uc_engine *uc, uint64_t limit)
++{
++    uc->board_ilimit = limit;
++}
 diff --git a/qemu/tcg/tcg-op.c b/qemu/tcg/tcg-op.c
 index d0223ea..4414d4d 100644
 --- a/qemu/tcg/tcg-op.c
@@ -621,3 +706,15 @@ index d0223ea..4414d4d 100644
  
      TCGv_ptr puc = tcg_const_ptr(tcg_ctx, tcg_ctx->uc);
      TCGv_i32 tmp = tcg_const_i32(tcg_ctx, 0);
+diff --git a/uc.c b/uc.c
+index 75b89a0..a277105 100644
+--- a/uc.c
++++ b/uc.c
+@@ -321,6 +321,7 @@ uc_err uc_open(uc_arch arch, uc_mode mode, uc_engine **result)
+         /* qemu/exec.c: phys_map_node_reserve() */
+         uc->alloc_hint = 16;
+         uc->errnum = UC_ERR_OK;
++        uc->board_ilimit = UINT64_MAX;   /* Model:Cycles board: no budget (patch_unicorn.py) */
+         uc->arch = arch;
+         uc->mode = mode;
+         uc->reg_read = default_reg_read;

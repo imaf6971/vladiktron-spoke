@@ -321,6 +321,7 @@ uc_err uc_open(uc_arch arch, uc_mode mode, uc_engine **result)
         /* qemu/exec.c: phys_map_node_reserve() */
         uc->alloc_hint = 16;
         uc->errnum = UC_ERR_OK;
+        uc->board_ilimit = UINT64_MAX;   /* Model:Cycles board: no budget (patch_unicorn.py) */
         uc->arch = arch;
         uc->mode = mode;
         uc->reg_read = default_reg_read;

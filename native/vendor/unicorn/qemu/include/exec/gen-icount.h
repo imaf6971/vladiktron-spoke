@@ -37,8 +37,13 @@ static inline void gen_tb_start(TCGContext *tcg_ctx, TranslationBlock *tb)
     // Unicorn:
     //    We CANT'T use brcondi_i32 here or we will fail liveness analysis
     //    because it marks the end of BB
+    /* Model:Cycles board: without delay slots the argument carries the block's instruction count, filled in by
+       gen_tb_end (see patch_unicorn.py). */
+    tcg_ctx->board_insn_op = NULL;
     if (tcg_ctx->delay_slot_flag != NULL) {
         tcg_gen_mov_i32(tcg_ctx, tmp, tcg_ctx->delay_slot_flag);
+    } else {
+        tcg_ctx->board_insn_op = tcg_last_op(tcg_ctx);
     }
     gen_helper_check_exit_request(tcg_ctx, puc, tmp);
     tcg_temp_free_i32(tcg_ctx, tmp);
@@ -51,6 +56,10 @@ static inline void gen_tb_end(TCGContext *tcg_ctx, TranslationBlock *tb, int num
         tcg_temp_free_i32(tcg_ctx, tcg_ctx->delay_slot_flag);
     }
     tcg_ctx->delay_slot_flag = NULL;
+    if (tcg_ctx->board_insn_op != NULL) {
+        tcg_set_insn_param(tcg_ctx->board_insn_op, 1, (TCGArg)num_insns << 1);
+        tcg_ctx->board_insn_op = NULL;
+    }
     if (tb_cflags(tb) & CF_USE_ICOUNT) {
         /* Update the num_insn immediate parameter now that we know
          * the actual insn count.  */

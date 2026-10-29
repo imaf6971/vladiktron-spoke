@@ -280,3 +280,15 @@ void uc_m68k_kick(uc_engine *uc)
         cpu_exit(uc->cpu);
     }
 }
+
+/* Model:Cycles board: guest instructions run so far (charged a block at a time, when the block starts), and the
+   count at which the run stops (at the next block start; UINT64_MAX: never). Call from the CPU thread. */
+uint64_t uc_m68k_icount(uc_engine *uc)
+{
+    return uc->board_icount;
+}
+
+void uc_m68k_set_ilimit(uc_engine *uc, uint64_t limit)
+{
+    uc->board_ilimit = limit;
+}

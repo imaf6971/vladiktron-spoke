@@ -499,3 +499,103 @@ for f, mark in (('accel/tcg/cpu-exec.c', 'stays executable'), ('accel/tcg/tcg-ru
                 ('accel/tcg/cpu-exec-common.c', 'stays executable'), ('softmmu/cpus.c', 'JIT writable again')):
     assert mark in (q / f).read_text(), f
 print('patched JIT write toggles')
+
+# --- instruction budget: the board keeps its own time (CLOCK-PLAN.md), counted in guest instructions. Unicorn's
+#     count option installs a code hook on every instruction; QEMU's icount decrement cannot be turned on, since
+#     Unicorn calls a helper at every block start instead (an inline branch there breaks TCG's liveness analysis,
+#     gen-icount.h). That helper now also counts: its second argument, a constant 0 on m68k (no delay slots), is
+#     patched at the block's end to (instructions << 1). A block is charged when it starts, in full; once the count
+#     reaches the limit the run stops at the next block start, before charging it. One add and one compare per
+#     block, on a call that was there already.
+s = (q / 'include/tcg/tcg.h').read_text()
+if 'board_insn_op' not in s:
+    old = '    TCGOp *icount_start_insn;\n'
+    assert old in s
+    s = s.replace(old, old + '    TCGOp *board_insn_op;   /* Model:Cycles board: the block\'s instruction count (patch_unicorn.py) */\n', 1)
+    (q / 'include/tcg/tcg.h').write_text(s)
+s = (q / 'include/exec/gen-icount.h').read_text()
+if 'board_insn_op' not in s:
+    old = '''    if (tcg_ctx->delay_slot_flag != NULL) {
+        tcg_gen_mov_i32(tcg_ctx, tmp, tcg_ctx->delay_slot_flag);
+    }
+    gen_helper_check_exit_request(tcg_ctx, puc, tmp);'''
+    assert old in s
+    s = s.replace(old, '''    /* Model:Cycles board: without delay slots the argument carries the block's instruction count, filled in by
+       gen_tb_end (see patch_unicorn.py). */
+    tcg_ctx->board_insn_op = NULL;
+    if (tcg_ctx->delay_slot_flag != NULL) {
+        tcg_gen_mov_i32(tcg_ctx, tmp, tcg_ctx->delay_slot_flag);
+    } else {
+        tcg_ctx->board_insn_op = tcg_last_op(tcg_ctx);
+    }
+    gen_helper_check_exit_request(tcg_ctx, puc, tmp);''', 1)
+    old = '''    tcg_ctx->delay_slot_flag = NULL;
+    if (tb_cflags(tb) & CF_USE_ICOUNT) {'''
+    assert old in s
+    s = s.replace(old, '''    tcg_ctx->delay_slot_flag = NULL;
+    if (tcg_ctx->board_insn_op != NULL) {
+        tcg_set_insn_param(tcg_ctx->board_insn_op, 1, (TCGArg)num_insns << 1);
+        tcg_ctx->board_insn_op = NULL;
+    }
+    if (tb_cflags(tb) & CF_USE_ICOUNT) {''', 1)
+    (q / 'include/exec/gen-icount.h').write_text(s)
+up = pathlib.Path(sys.argv[1]) / 'include/uc_priv.h'
+s = up.read_text()
+if 'board_icount' not in s:
+    old = '    int nested_level;                         // Current nested_level\n'
+    assert old in s
+    s = s.replace(old, old + '''    uint64_t board_icount, board_ilimit; // Model:Cycles board: instructions run, and where the run stops
+                                         // (patch_unicorn.py)
+''', 1)
+    up.write_text(s)
+s = (q / 'accel/tcg/tcg-runtime.c').read_text()
+if 'board_icount' not in s:
+    old = '''    uc_engine *uc = p;
+
+    if (cpu_loop_exit_requested(uc->cpu) && !in_delay_slot) {'''
+    assert old in s
+    s = s.replace(old, '''    uc_engine *uc = p;
+    /* Model:Cycles board: instruction budget (see patch_unicorn.py). Bit 0 is the delay-slot flag of the
+       architectures that have one; the rest is the block's instruction count. */
+    uint32_t insns = in_delay_slot >> 1;
+    in_delay_slot &= 1;
+    if (uc->board_icount >= uc->board_ilimit && !in_delay_slot) {
+        uc->stop_request = true;
+        cpu_exit(uc->cpu);
+    }
+
+    if (cpu_loop_exit_requested(uc->cpu) && !in_delay_slot) {''', 1)
+    old = '''            cpu_loop_exit_restore(uc->cpu, GETPC());
+        }
+    }
+}'''
+    assert old in s
+    s = s.replace(old, '''            cpu_loop_exit_restore(uc->cpu, GETPC());
+        }
+    }
+    uc->board_icount += insns;
+}''', 1)
+    (q / 'accel/tcg/tcg-runtime.c').write_text(s)
+s = uu.read_text()
+if 'uc_m68k_icount' not in s:
+    s += '''
+/* Model:Cycles board: guest instructions run so far (charged a block at a time, when the block starts), and the
+   count at which the run stops (at the next block start; UINT64_MAX: never). Call from the CPU thread. */
+uint64_t uc_m68k_icount(uc_engine *uc)
+{
+    return uc->board_icount;
+}
+
+void uc_m68k_set_ilimit(uc_engine *uc, uint64_t limit)
+{
+    uc->board_ilimit = limit;
+}
+'''
+    uu.write_text(s)
+s = (pathlib.Path(sys.argv[1]) / 'uc.c').read_text()
+if 'board_ilimit = UINT64_MAX' not in s:
+    old = '        uc->errnum = UC_ERR_OK;\n'
+    assert old in s
+    s = s.replace(old, old + '        uc->board_ilimit = UINT64_MAX;   /* Model:Cycles board: no budget (patch_unicorn.py) */\n', 1)
+    (pathlib.Path(sys.argv[1]) / 'uc.c').write_text(s)
+print('patched instruction budget')

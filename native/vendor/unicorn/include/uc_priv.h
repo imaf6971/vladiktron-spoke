@@ -416,6 +416,8 @@ struct uc_struct {
 
     sigjmp_buf jmp_bufs[UC_MAX_NESTED_LEVEL]; // To support nested uc_emu_start
     int nested_level;                         // Current nested_level
+    uint64_t board_icount, board_ilimit; // Model:Cycles board: instructions run, and where the run stops
+                                         // (patch_unicorn.py)
 
     struct TranslationBlock *last_tb; // The real last tb we executed.
 

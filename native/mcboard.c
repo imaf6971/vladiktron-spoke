@@ -15,6 +15,8 @@
 
 void uc_m68k_set_irq(uc_engine *uc, int level, int vector);   // patched Unicorn (patch_unicorn.py)
 void uc_m68k_kick(uc_engine *uc);
+uint64_t uc_m68k_icount(uc_engine *uc);
+void uc_m68k_set_ilimit(uc_engine *uc, uint64_t limit);
 
 #define DDR_SIZE 0x08000000u
 #define MCB_FLASH_SIZE 0x200000u     // EN25QH16: 2 MB (flash.bin, as mcfirmware.c writes it)
@@ -149,7 +151,7 @@ struct mcboard {
         uint64_t slices, late, resync, wait_irq, wait_render, wait_usb, sof_irq, dtim2;
         double usb_us;                      // host time spent on microframes
         double idle_us;                     // host time the CPU thread slept, idle
-        uint64_t blocks0, uframes0, skips0;   // totals at the last log
+        uint64_t blocks0, uframes0, skips0, insns0;   // totals at the last log
     } rt;
 
     // audio codec on I2C0 (address 0x1A, sent as 0x34): register writes are (reg, value) pairs
@@ -1612,16 +1614,17 @@ static int rt_on(void) { static int v = -1; if (v < 0) v = getenv("MCB_RTLOG") !
 static void rt_log(mcboard *b, double t) {
     if (rt_on() && b->rt.next)
         fprintf(stderr, "[rt] %.0f s: %llu slices, %llu blocks (%llu late, latest %.1f ms, %llu resyncs; waited irq %llu, render %llu, "
-                "usb %llu), %llu uframes (%llu stalls), %llu SOF irqs, %llu timer-2 reads; microframes took %.2f ms; slept %.0f ms\n", t / 1e6,
+                "usb %llu), %llu uframes (%llu stalls), %llu SOF irqs, %llu timer-2 reads; microframes took %.2f ms; slept %.0f ms; %.2f M insns\n", t / 1e6,
                 (unsigned long long)b->rt.slices, (unsigned long long)(b->n_blocks - b->rt.blocks0),
                 (unsigned long long)b->rt.late, b->rt.late_max / 1000, (unsigned long long)b->rt.resync,
                 (unsigned long long)b->rt.wait_irq, (unsigned long long)b->rt.wait_render, (unsigned long long)b->rt.wait_usb,
                 (unsigned long long)(b->usb.n_uframes - b->rt.uframes0), (unsigned long long)(b->usb.n_skips - b->rt.skips0),
-                (unsigned long long)b->rt.sof_irq, (unsigned long long)b->rt.dtim2, b->rt.usb_us / 1000, b->rt.idle_us / 1000);
+                (unsigned long long)b->rt.sof_irq, (unsigned long long)b->rt.dtim2, b->rt.usb_us / 1000, b->rt.idle_us / 1000,
+                (double)(uc_m68k_icount(b->uc) - b->rt.insns0) / 1e6);
     double next = t + 1e6;
-    uint64_t blocks = b->n_blocks, uframes = b->usb.n_uframes, skips = b->usb.n_skips;
+    uint64_t blocks = b->n_blocks, uframes = b->usb.n_uframes, skips = b->usb.n_skips, insns = uc_m68k_icount(b->uc);
     memset(&b->rt, 0, sizeof b->rt);
-    b->rt.next = next; b->rt.blocks0 = blocks; b->rt.uframes0 = uframes; b->rt.skips0 = skips;
+    b->rt.next = next; b->rt.blocks0 = blocks; b->rt.uframes0 = uframes; b->rt.skips0 = skips; b->rt.insns0 = insns;
 }
 // Host time (us since t0) of the next event that raises an interrupt, at most `cap` after t.
 static double next_event(mcboard *b, double t, double cap) {

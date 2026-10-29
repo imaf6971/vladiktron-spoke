@@ -167,6 +167,14 @@ void HELPER(exit_atomic)(CPUArchState *env)
 
 void HELPER(check_exit_request)(void *p, uint32_t in_delay_slot) {
     uc_engine *uc = p;
+    /* Model:Cycles board: instruction budget (see patch_unicorn.py). Bit 0 is the delay-slot flag of the
+       architectures that have one; the rest is the block's instruction count. */
+    uint32_t insns = in_delay_slot >> 1;
+    in_delay_slot &= 1;
+    if (uc->board_icount >= uc->board_ilimit && !in_delay_slot) {
+        uc->stop_request = true;
+        cpu_exit(uc->cpu);
+    }
 
     if (cpu_loop_exit_requested(uc->cpu) && !in_delay_slot) {
         // There are stil something we have to before exiting to be compatible with previous behaviors
@@ -181,4 +189,5 @@ void HELPER(check_exit_request)(void *p, uint32_t in_delay_slot) {
             cpu_loop_exit_restore(uc->cpu, GETPC());
         }
     }
+    uc->board_icount += insns;
 }
