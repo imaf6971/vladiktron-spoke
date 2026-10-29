@@ -22,7 +22,7 @@ let package = Package(
             name: "VladiktronSpoke",
             dependencies: ["MCBoard"],
             path: "app",
-            exclude: ["Info.plist", "Spoke.entitlements"],
+            exclude: ["Info.plist", "Spoke.entitlements", "AppIcon.icns", "make_icon.swift"],
             linkerSettings: [.unsafeFlags([unicorn]), .linkedLibrary("z")]
         ),
         .testTarget(                                  // `swift test`: the MiniLab mapping (tests/swift)

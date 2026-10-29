@@ -61,6 +61,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp app/Info.plist "$APP/Contents/Info.plist"
 cp ../LICENSE ../THIRD-PARTY-NOTICES.md "$APP/Contents/Resources/"
+cp app/AppIcon.icns "$APP/Contents/Resources/"     # drawn by app/make_icon.swift
 cp "$BIN" "$APP/Contents/MacOS/VladiktronSpoke"
 TIMESTAMP=--timestamp=none                          # ad hoc; a Developer ID signature gets Apple's secure timestamp
 [ -n "$SIGN_ID" ] && TIMESTAMP=--timestamp
