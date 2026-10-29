@@ -350,25 +350,40 @@ final class Board: ObservableObject, @unchecked Sendable {
         if l != leds { leds = l }
         let u = mcb_usb_state(b)
         if u != usbState { usbState = u }
-        if problem == nil && !shuttingDown {
+        if (problem == nil || problemIsHang) && !shuttingDown {   // (a hang that passes clears its message)
             let stopped = thread?.isFinished == true            // mcb_run returned by itself: a fault
             var why = [CChar](repeating: 0, count: 256)
             if stopped { _ = mcb_fault(b, &why, why.count) }
-            if let p = Board.problem(cpuStopped: stopped, fault: String(cString: why), osExceptions: mcb_os_exceptions(b)) {
-                NSLog("Spoke: %@", p)
+            let busy = stopped ? 0 : mcb_busy_seconds(b)
+            let p = Board.problem(cpuStopped: stopped, fault: String(cString: why), osExceptions: mcb_os_exceptions(b),
+                                  busySeconds: busy)
+            if p != problem {
+                NSLog("Spoke: %@", p ?? "the OS responds again")
                 problem = p
+                problemIsHang = p != nil && !stopped && mcb_os_exceptions(b) == 0
             }
         }
         snapshotIfRequested()
     }
 
-    /// What stopped the Model:Cycles, in words for the panel; nil while it runs. `fault` is mcb_fault's reason.
-    static func problem(cpuStopped: Bool, fault: String, osExceptions: UInt64) -> String? {
+    private var problemIsHang = false
+    /// The OS has run this long without a pause in its idle loop: it has stopped responding. (OS 1.13's longest busy
+    /// stretch, measured: 0.14 s, formatting a new +Drive at boot; playing, pads, knobs and saving at power-off stay under
+    /// 0.01 s.)
+    static let hangSeconds = 10.0
+
+    /// What stopped the Model:Cycles, in words for the panel; nil while it runs. `fault` is mcb_fault's reason,
+    /// `busySeconds` mcb_busy_seconds.
+    static func problem(cpuStopped: Bool, fault: String, osExceptions: UInt64, busySeconds: Double) -> String? {
         if osExceptions > 0 {
             return "The Model:Cycles OS crashed: it showed EXCEPTION on its screen and stopped."
         }
         if cpuStopped {
             return fault.isEmpty ? "The emulator stopped." : "The emulator stopped: \(fault)."
+        }
+        if busySeconds >= hangSeconds {
+            return String(format: "The Model:Cycles OS stopped responding: it has been busy for over %.0f s without a pause.",
+                          hangSeconds)
         }
         return nil
     }
