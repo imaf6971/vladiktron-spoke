@@ -1,0 +1,23 @@
+# Builds everything and runs the checks that need no firmware (the Model:Cycles OS is each user's own and is never
+# in this repository): mcunit_test (the board's own logic), mcfirmware_test (the OS file decoder with made-up files)
+# and swift test (MiniLab mapping, MIDI, audio output). The board tests that boot the OS run on a developer's Mac.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (Unicorn, tools, app; no firmware)
+        run: native/build.sh
+      - name: Checks that need no firmware
+        run: native/test.sh
+      - name: Logs
+        if: failure()
+        run: tail -n 60 native/build/*.log
