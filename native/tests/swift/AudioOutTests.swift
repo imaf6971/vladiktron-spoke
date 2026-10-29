@@ -38,6 +38,27 @@ final class AudioOutTests: XCTestCase {
         XCTAssertEqual(out.restartedOnMain, false, "the restart ran on the main thread")
     }
 
+    /// An output that will not start says so (the panel shows it), and one that starts clears what it said before.
+    func testAnOutputThatWillNotStartSaysSo() {
+        let out = AudioOut(name: "test", read: { _, _ in 0 }, available: { 0 })
+        var problems: [String?] = []
+        out.onProblem = { problems.append($0) }
+        XCTAssertFalse(out.start(device: 0xFFFF_FF00))                     // no such device
+        out.stop()
+        XCTAssertEqual(problems.count, 1)
+        XCTAssertTrue(problems.first??.contains("would not start") == true, "\(problems)")
+    }
+
+    func testAStartedOutputHasNoProblem() throws {
+        let out = AudioOut(name: "test", read: { _, _ in 0 }, available: { 0 })
+        var problems: [String?] = []
+        out.onProblem = { problems.append($0) }
+        guard out.start() else { throw XCTSkip("no audio output on this machine") }
+        out.stop()
+        XCTAssertEqual(problems.count, 1)
+        XCTAssertNil(problems.first ?? "missing")
+    }
+
     func testStoppedOutputStaysStopped() throws {
         let out = try started()
         out.stop()

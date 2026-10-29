@@ -27,11 +27,20 @@ final class BoardHandle: @unchecked Sendable {
     }
 }
 
+/// Something the user should know that does not stop the Model:Cycles (an audio output that would not start, the
+/// microphone not allowed), shown in a bar under the panel until it is fixed or dismissed.
+struct Notice: Equatable {
+    let text: String
+    var actionTitle: String? = nil                      // a button that opens `actionURL`
+    var actionURL: URL? = nil
+}
+
 final class Board: ObservableObject, @unchecked Sendable {
     @Published var screen: CGImage?
     @Published var leds: UInt64 = 0
     @Published var error: String?
     @Published var problem: String?                     // the Model:Cycles stopped (Board.problem): the panel says so
+    @Published var notices: [String: Notice] = [:]      // by where they come from: "main", "usb out", "usb in"
     @Published var needsFirmware = false                // no OS installed yet: the panel asks for the .syx
     @Published var usbState: Int32 = 0                  // mcb_usb_state
     @Published var controller: String?                  // connected MIDI controller (MiniLab 3)
@@ -101,6 +110,8 @@ final class Board: ObservableObject, @unchecked Sendable {
         t.start()
         thread = t
         let main = AudioOut(name: "main", read: { mcb_audio(b, $0, $1) }, available: { mcb_audio_available(b) })
+        main.onProblem = { [weak self] p in DispatchQueue.main.async { self?.setNotice("main", p.map { Notice(text: $0) }) } }
+        usbAudio.onNotice = { [weak self] key, n in DispatchQueue.main.async { self?.setNotice(key, n) } }
         main.start()
         audio = main
         usbAudio.start(board: b)
@@ -199,6 +210,11 @@ final class Board: ObservableObject, @unchecked Sendable {
         board = nil
         if let activity { ProcessInfo.processInfo.endActivity(activity) }
         activity = nil
+        notices = [:]                                       // about outputs and inputs that are closed now
+    }
+
+    func setNotice(_ key: String, _ notice: Notice?) {
+        if notices[key] != notice { notices[key] = notice }
     }
 
     /// Shuts down cleanly, runs `change` on the data folder (with the board closed), then boots again.

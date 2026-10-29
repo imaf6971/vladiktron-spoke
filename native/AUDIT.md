@@ -30,6 +30,7 @@ practical. `./build.sh` is clean. `./test.sh` passes: `mcunit_test` with 14 chec
 | P2 batched flash.bin saves | `661520a` | `mcunit_test`, through the SPI registers: a sector erase and 16 page programs saved flash.bin 17 times before; now none at once, one save a moment later with all of it, and a last change is still saved by `mcb_destroy`. `mcshutdown_test` passes. Not seen with the OS saving its own settings (no headless test changes one) |
 | T1 firmware decoder tests | `dda4ec3` | `mcfirmware_test`: 18 kinds of wrong file with made-up SysEx, plus the real file when present; a decoder without its checksum check fails it |
 | T3 CI | `eda0932` | `.github/workflows/ci.yml` runs `build.sh` and `test.sh` on macOS runners; rehearsed in a fresh clone with no `build/` and no `.syx` (built in 26 s, all firmware-free checks passed). **First run on GitHub not seen yet** |
+| U2 failures that said nothing | (this commit) | `AudioOutTests`: an output that will not start (no such device) reports it with the device and Core Audio's error, and a started one reports nothing; `NoticeTests`: the microphone notice names the input and links to the setting, and the bar renders (picture checked). A normal scripted run shows no bar. **Not tried by hand**: a real denied microphone, a real output that refuses to start |
 
 Left from R11: `emmc_save_ext` (not atomic), `MidiStreamParser`'s unbounded SysEx (belongs with R4), and the
 `MiniLab.rescan` thread race. `README.md`'s Pieces table doesn't list `mcunit_test` yet: it had your
@@ -260,7 +261,7 @@ Factory reset file swap.
 - **[done 73dbc2c] U1 — Low, S. The reset alerts promise factory content that won't appear.** They say the OS "formats [the
   +Drive] with its factory content" (`SpokeApp.swift:108, 123`). Your uncommitted README edit now says the FACTORY
   folders stay empty.
-- **[partly done: a board that won't start now shows an overlay] U2 — Medium, S. Several failures say nothing.** Microphone access denied (`UsbAudio.swift:126-131`) does
+- **[done, see Progress] U2 — Medium, S. Several failures say nothing.** Microphone access denied (`UsbAudio.swift:126-131`) does
   nothing visible. A main output that fails to start only logs (`AudioOut.swift:70`; `Board.start` ignores the
   result). An emulator fault: see R3.
 - **U3 — Low, M. Accessibility.** No accessibility labels on keys, knobs or pads, and knobs can't be adjusted from

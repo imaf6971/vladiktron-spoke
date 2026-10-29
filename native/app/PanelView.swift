@@ -97,6 +97,11 @@ struct PanelView: View {
         .background(Color(red: 0.600, green: 0.604, blue: 0.588))
         .background(KeyboardMonitor(board: board, hoveredKnob: $hoveredKnob))
         .overlay { if board.needsFirmware { FirmwareSetupView(board: board) } }
+        .overlay(alignment: .bottom) {
+            if !board.notices.isEmpty {
+                NoticeBar(notices: board.notices) { board.setNotice($0, nil) }.padding(.bottom, 28)
+            }
+        }
         .overlay {
             if !board.needsFirmware, let message = board.problem ?? board.error {
                 ProblemView(board: board, message: message, started: board.problem != nil)
@@ -380,6 +385,36 @@ struct ProblemView: View {
             .shadow(radius: 20)
         }
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// Notices (Board.notices) in a bar under the panel: each with its button, if any, and a way to dismiss it.
+struct NoticeBar: View {
+    let notices: [String: Notice]
+    let dismiss: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(notices.keys.sorted(), id: \.self) { key in
+                let n = notices[key]!
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text(n.text).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    Spacer(minLength: 8)
+                    if let title = n.actionTitle, let url = n.actionURL {
+                        Button(title) { NSWorkspace.shared.open(url) }
+                    }
+                    Button { dismiss(key) } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Dismiss")
+                }
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .frame(maxWidth: 760, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10).fill(.regularMaterial))
+        .shadow(radius: 8)
+        .padding(.horizontal, 16)
     }
 }
 

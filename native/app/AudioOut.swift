@@ -25,6 +25,11 @@ final class AudioOut {
     private let queue = DispatchQueue(label: "Vladiktron Spoke audio output", qos: .userInitiated)
     private let onQueueKey = DispatchSpecificKey<Bool>()
     private let name: String
+    /// Told (on the output's own queue) when the output would not start, in a sentence for the user, and nil once it
+    /// plays. `problemTitle` begins the sentence.
+    var onProblem: ((String?) -> Void)?
+    var problemTitle = "No sound"
+    private var lastError: Error?
     private let read: (UnsafeMutablePointer<Float>, Int) -> Int
     private let available: () -> Int
 
@@ -108,7 +113,17 @@ final class AudioOut {
                                                 queue, block)
             defaultListener = block
         }
-        return run()
+        let ok = run()
+        report(ok)
+        return ok
+    }
+
+    private func report(_ ok: Bool) {
+        guard !ok else { onProblem?(nil); return }
+        let id = device ?? AudioOut.defaultOutput()
+        let what = id.map(AudioOut.name) ?? "the default output"
+        let code = (lastError as NSError?).map { " (Core Audio error \($0.code))" } ?? ""
+        onProblem?("\(problemTitle): \(what) would not start\(code). It tries again when the output changes.")
     }
 
     /// Connects the stream to the output as it is now (its sample rate may have changed) and starts it.
@@ -125,9 +140,11 @@ final class AudioOut {
             firstRender.rendered = 0
             firstRender.started = ProcessInfo.processInfo.systemUptime
             try step("start") { try engine.start() }
+            lastError = nil
             return true
         } catch {
             NSLog("Spoke: %@ audio output failed: %@", name, "\(error)")
+            lastError = error
             return false
         }
     }
@@ -145,13 +162,14 @@ final class AudioOut {
         NSLog("Spoke %@: %@ (%@ -> %@); output %@: %@", name, reason, from, to, ok ? "restarted" : "did not start",
               steps.joined(separator: ", "))
         if ok {                                         // and when the device first asked for audio
+            report(true)
             queue.asyncAfter(deadline: .now() + 3) { [first = firstRender, name] in
                 let ms = first.rendered > 0 ? String(format: "%.0f ms", (first.rendered - first.started) * 1000) : "not yet"
                 NSLog("Spoke %@: first audio after the restart's start: %@", name, ms)
             }
             return
         }
-        guard tries > 1 else { NSLog("Spoke %@: the output would not start again", name); return }
+        guard tries > 1 else { NSLog("Spoke %@: the output would not start again", name); report(false); return }
         queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.restart(because: reason, tries: tries - 1)
         }
@@ -164,19 +182,23 @@ final class AudioOut {
         return try work()
     }
 
-    /// "Name @ 48000 Hz", for the log.
-    private static func describe(_ id: AudioDeviceID) -> String {
+    /// The device's name ("MacBook Pro Speakers"; "device 42" if it has none or is gone).
+    private static func name(_ id: AudioDeviceID) -> String {
         var addr = AudioObjectPropertyAddress(mSelector: kAudioObjectPropertyName, mScope: kAudioObjectPropertyScopeGlobal,
                                               mElement: kAudioObjectPropertyElementMain)
         var name: Unmanaged<CFString>?
         var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        let n = AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &name) == noErr
-            ? (name?.takeRetainedValue() as String?) ?? "?" : "device \(id)"
-        addr.mSelector = kAudioDevicePropertyNominalSampleRate
-        var rate = Float64(0)
-        size = UInt32(MemoryLayout<Float64>.size)
+        return AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &name) == noErr
+            ? (name?.takeRetainedValue() as String?) ?? "device \(id)" : "device \(id)"
+    }
+
+    /// "Name @ 48000 Hz", for the log.
+    private static func describe(_ id: AudioDeviceID) -> String {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
+                                              mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var rate = Float64(0), size = UInt32(MemoryLayout<Float64>.size)
         _ = AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &rate)
-        return String(format: "%@ @ %.0f Hz", n, rate)
+        return String(format: "%@ @ %.0f Hz", name(id), rate)
     }
 
     private static func defaultOutput() -> AudioDeviceID? {
