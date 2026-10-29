@@ -76,8 +76,16 @@ sample for sample. What remains:
   way the hardware does, the app needs an AudioServerPlugIn (a HAL driver, installed separately and signed) that
   shares its buffers with the app.
 - **Starvation.** If the emulator thread is starved for more than 8 ms (heavy load on the Mac), the OS loses the
-  streams' pace. The host then restarts them (SET_INTERFACE off and on), which leaves a short gap. Measure how
-  often this happens on a busy laptop, and consider giving the CPU thread a real-time scheduling policy.
+  streams' pace. The host then restarts them (SET_INTERFACE off and on), which leaves a short gap. Measured
+  2026-10-29 (M4 Pro, the app playing for a minute, 24 or 96 threads spinning at user-interactive QoS): no
+  underruns and no stream restarts, with or without USB audio; 116–165 audio blocks per run were more than 2 ms
+  late, the worst 4.8–7.0 ms, all absorbed by the 21 ms cushion. Joining the main output's audio workgroup (with a
+  time-constraint policy, as gearmulator does) took that to 0 late blocks, worst 0.2 ms, but raised the app's CPU
+  while playing from ~30 % to ~50 % of a core. Joining alone does it (not the policy), and the extra time is on the
+  main thread, not the board's CPU thread, which does the same work either way; the cause is not found. That
+  work is on the local branch `wip/audio-workgroup`. A board on its own emulated clock, run ahead one IO period
+  per audio callback, would wake the CPU thread tens of times a second instead of thousands, which suits a
+  real-time thread better; revisit this after that.
 - **Fixed USB slice.** While USB audio streams, the CPU runs in 125 µs slices (one microframe) instead of 1 ms:
   about 6200 slices/s instead of 800, and the microframes take about 3–8 ms of host time per second (M4 Pro,
   `MCB_RTLOG=1`). With nothing routed, microframes take ~0.15 ms/s. Since the idle sleep, streaming costs
