@@ -33,7 +33,7 @@
 // Key names are the printed ones; mcboard.h names some keys after their FUNC function (PRESET MENU = MACHINES,
 // QUANTIZE = PUNCH, CLICK = GATE, LFO SETUP = LFO, TAP BPM = TEMPO, TEMP SAVE = SETTINGS, PAD MENU = BACK).
 //
-// Knobs send absolute values; each change of one becomes one encoder detent on the Model:Cycles. In DAW mode each
+// Knobs send absolute values; each change of one becomes one value step on the Model:Cycles (Panel.turn). In DAW mode each
 // value a knob or the main encoder moves is one value step on the Model:Cycles, sent as single OS knob events (see
 // step()); turned fast, the MiniLab skips values and the OS speeds up on its own. The app also sets a knob back to
 // 64 when it nears either end, so the knobs never run out. Faders, in both modes, go to the active track as MIDI CC,
@@ -47,7 +47,7 @@ final class MiniLab {
     /// What the mapping drives: the board's front panel (thread-safe C calls underneath).
     struct Panel {
         let key: (Int, Bool) -> Void
-        let turn: (Int, Int) -> Void                  // encoder, detents
+        let turn: (Int, Int) -> Void                  // encoder, value steps (KnobSteps)
         let nudge: (Int, Int) -> Void                 // encoder, OS knob events (half detents)
         let pad: (Int, Float) -> Void
         let leds: () -> UInt64
@@ -83,6 +83,7 @@ final class MiniLab {
                                                        (0, 110, 30), (0, 70, 127), (90, 0, 127)]
 
     private let panel: Panel
+    private let knobSteps: KnobSteps                         // DAW-mode value steps (panel.nudge)
     private let notes: MidiPortPair
     private let onChange: (String?) -> Void
     private var client = MIDIClientRef()
@@ -107,6 +108,7 @@ final class MiniLab {
 
     init(panel: Panel, notes: MidiPortPair, onChange: @escaping (String?) -> Void) {
         self.panel = panel
+        knobSteps = KnobSteps(nudge: panel.nudge)
         self.notes = notes
         self.onChange = onChange
     }
@@ -336,9 +338,6 @@ final class MiniLab {
     private var currentBankB = false
     private var faderShown: [Int: TimeInterval] = [:]        // encoder -> when a knob event last showed its value
     private var faderMoved: [Int: TimeInterval] = [:]        // encoder -> time of its fader's last move
-    private var lastStep: [Int: TimeInterval] = [:]          // encoder -> time of its last step
-    private var waking: [Int: TimeInterval] = [:]            // encoder -> end of its wake-up wait
-    private var deferred: [Int: Int] = [:]                   // steps held for the end of that wait
 
     private func dawPad(note: UInt8, velocity: UInt8, pressure: Bool) {
         let bankB = note >= 44
@@ -373,24 +372,7 @@ final class MiniLab {
     }
 
     /// `n` value steps of encoder `enc` on the Model:Cycles (one per MiniLab value: it skips values when turned fast).
-    /// The OS ignores the first knob event after a pause, so after one the app sends a wake-up event first and the
-    /// steps 40 ms later (two events closer together can count twice); steps that come in meanwhile go with them.
-    private func step(_ enc: Int, _ n: Int) {
-        let now = ProcessInfo.processInfo.systemUptime
-        defer { lastStep[enc] = now }
-        if let until = waking[enc], now < until { deferred[enc, default: 0] += n; return }
-        if now - (lastStep[enc] ?? 0) < 0.15 { panel.nudge(enc, n); return }
-        panel.nudge(enc, n.signum())
-        waking[enc] = now + 0.04
-        deferred[enc] = n
-        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.04) { [weak self] in
-            guard let self else { return }
-            self.lock.lock()
-            if let n = self.deferred.removeValue(forKey: enc), n != 0 { self.panel.nudge(enc, n) }
-            self.waking[enc] = nil
-            self.lock.unlock()
-        }
-    }
+    private func step(_ enc: Int, _ n: Int) { knobSteps.step(enc, n) }
 
     /// Fader for encoder `enc` at `v`: its parameter on the active track as MIDI CC. A value set by CC shows nothing
     /// on the screen, so the app also sends a lone knob event, at most every 0.6 s: after a pause the OS only shows

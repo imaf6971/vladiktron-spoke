@@ -58,6 +58,7 @@ final class Board: ObservableObject, @unchecked Sendable {
 
     private var board: OpaquePointer?
     private var handle: BoardHandle?                    // the board for MIDI and MiniLab calls (closed before destroy)
+    private var knobSteps: KnobSteps?                   // knob turns as value steps (scroll, drag, MiniLab)
     private var thread: Thread?
     private var activity: NSObjectProtocol?             // keeps App Nap away while the board runs
     private var timer: Timer?
@@ -130,8 +131,10 @@ final class Board: ObservableObject, @unchecked Sendable {
         }
         let h = BoardHandle(b)                              // MiniLab timers may fire after the board is gone
         handle = h
+        let steps = KnobSteps(nudge: { e, n in h.with { mcb_encoder_events($0, Int32(e), Int32(n)) } })
+        knobSteps = steps
         let panel = MiniLab.Panel(key: { k, down in h.with { mcb_key($0, Int32(k), down ? 1 : 0) } },
-                                  turn: { e, n in h.with { mcb_encoder($0, Int32(e), Int32(n)) } },
+                                  turn: { e, n in steps.step(e, n) },
                                   nudge: { e, n in h.with { mcb_encoder_events($0, Int32(e), Int32(n)) } },
                                   pad: { p, v in h.with { mcb_pad($0, Int32(p), v) } },
                                   leds: { h.with { mcb_leds($0) } ?? 0 })
@@ -358,8 +361,9 @@ final class Board: ObservableObject, @unchecked Sendable {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in self?.key(index, down: false) }
     }
 
+    /// `steps` value steps (one per scroll click or drag step; see KnobSteps).
     func turn(_ encoder: Int, steps: Int) {
-        if let b = board, steps != 0 { mcb_encoder(b, Int32(encoder), Int32(steps)) }
+        knobSteps?.step(encoder, steps)
     }
 
     func pad(_ pad: Int, pressure: Float) {
