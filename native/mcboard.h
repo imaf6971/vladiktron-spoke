@@ -61,6 +61,7 @@ uint64_t mcb_screen(mcboard *b, uint8_t out[1024]);
 // 9 REVERB SEND, 10 LFO SPEED, 11 VOL+DIST, 12 SWING, 13 CHANCE, 14 REVERB SIZE, 15 DELAY TIME, 16 MAIN VOLUME);
 // a step is one detent (a full quadrature cycle, two OS knob events). Pads 1..6 are T1..T6, pressure 0..1.
 void mcb_key(mcboard *b, int index, int down);
+// The OS takes about 50 detents a second: at most 16 wait, and a turn the other way drops what still waits.
 void mcb_encoder(mcboard *b, int number, int steps);
 // The same in OS knob events (half a detent each). The OS ignores the first event after a pause of about 200 ms and
 // counts one value per event after that; two events 40 ms apart make one clean click.

@@ -857,6 +857,11 @@ static void mmio_write(uc_engine *uc, uint64_t off, unsigned size, uint64_t valu
 // reads of its column (each column is read at 1.5 kHz, so about every 3 ms, a fast hand). Back to back, fast turns
 // came out uneven (two bursts of +20 events moved PITCH +9.6 and +6.7; with the gap, +8.8 and +8.0, -8.4 and -8.6).
 #define ENC_GAP 4
+// The OS takes turns at that pace, ~200 transitions (50 detents) a second, far slower than a fast scroll sends them.
+// So at most ENC_BACKLOG transitions (16 detents, ~0.3 s) wait, and a turn the other way drops what still waits, as
+// a real knob stops at once. (Without both, a fast spin queued thousands, and the knob ignored turns back for 10 s
+// and more.)
+#define ENC_BACKLOG 64
 static const uint8_t gray_next[4] = {1, 3, 0, 2}, gray_prev[4] = {2, 0, 3, 1};
 static uint64_t fp_read(uc_engine *uc, uint64_t off, unsigned size, void *user) {
     mcboard *b = user;
@@ -1823,14 +1828,22 @@ void mcb_key(mcboard *b, int index, int down) {
     else __atomic_fetch_and(&b->keys[index >> 3], (uint8_t)~bit, __ATOMIC_SEQ_CST);
 }
 
+static void enc_queue(mcboard *b, int number, int transitions) {    // (see ENC_BACKLOG)
+    if (number < 1 || number > 16 || !transitions) return;
+    atomic_int *p = &b->enc_pending[enc_raw[number]];
+    int old = atomic_load(p), now;
+    do {                                                               // (the CPU thread takes from it meanwhile)
+        now = (old > 0) == (transitions > 0) ? old + transitions : transitions;
+        now = now > ENC_BACKLOG ? ENC_BACKLOG : now < -ENC_BACKLOG ? -ENC_BACKLOG : now;
+    } while (!atomic_compare_exchange_weak(p, &old, now));
+}
+
 void mcb_encoder(mcboard *b, int number, int steps) {
-    if (number < 1 || number > 16) return;
-    atomic_fetch_add(&b->enc_pending[enc_raw[number]], 4 * steps);     // one detent = a full Gray cycle
+    enc_queue(b, number, 4 * steps);                                   // one detent = a full Gray cycle
 }
 
 void mcb_encoder_events(mcboard *b, int number, int events) {
-    if (number < 1 || number > 16) return;
-    atomic_fetch_add(&b->enc_pending[enc_raw[number]], 2 * events);    // one OS knob event = half a Gray cycle
+    enc_queue(b, number, 2 * events);                                  // one OS knob event = half a Gray cycle
 }
 
 void mcb_pad(mcboard *b, int pad, float pressure) {

@@ -163,6 +163,10 @@ int main(int argc, char **argv) {
     events(-1, 10, 0.05); mcb_run(B, 1);
     int down = top - decay();
     check(down >= up - 1 && down <= up + 1, "the same turn back: as far", down, "within 1 of the way up");
+    for (int i = 0; i < 200; i++) { mcb_encoder(B, DECAY, 3); mcb_run(B, 0.002); }   // a fast scroll up
+    int spun = decay();
+    events(-1, 10, 0.05); mcb_run(B, 1);
+    check(decay() < spun, "a fast spin, then turned back: it goes down", spun - decay(), "> 0 steps down");
 
     taps(0.5);
     check(abs(tempo_x10() - 1200) <= 10, "tap tempo, 0.5 s taps (BPM x 10)", tempo_x10(), "1190..1210");

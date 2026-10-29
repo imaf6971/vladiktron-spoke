@@ -131,6 +131,25 @@ static void test_unmapped_access(void) {
     mcb_destroy(b);
 }
 
+// Knob turns: a fast spin queues no more than ENC_BACKLOG transitions, and turning back drops what is still queued,
+// as a real knob stops at once (the OS takes ~200 transitions a second; a fast scroll used to queue thousands, and
+// the knob ignored turns the other way until they had drained, 10 s and more).
+static void test_encoder_backlog(void) {
+    char err[256];
+    mcboard *b = create(MCB_FLASH_SIZE, err, sizeof err);
+    if (!b) { check(0, err); return; }
+    atomic_int *p = &b->enc_pending[enc_raw[3]];
+    for (int i = 0; i < 200; i++) mcb_encoder(b, 3, 3);
+    check(atomic_load(p) == ENC_BACKLOG, "a fast spin queues at most ENC_BACKLOG transitions");
+    mcb_encoder(b, 3, -1);
+    check(atomic_load(p) == -4, "turning back drops the queue: one detent back is 4 transitions back");
+    mcb_encoder_events(b, 3, 1);
+    check(atomic_load(p) == 2, "... and so does a knob event the other way");
+    mcb_encoder(b, 3, -1000);
+    check(atomic_load(p) == -ENC_BACKLOG, "a fast spin down is capped too");
+    mcb_destroy(b);
+}
+
 // MIDI in, both ports: what does not fit is not taken (the caller keeps it and sends it again), never dropped.
 static void test_midi_in_backpressure(void) {
     mcboard *b = calloc(1, sizeof *b);
@@ -306,6 +325,7 @@ int main(void) {
     test_midi_realtime_ahead();
     test_flash_save_batched();
     test_busy_seconds();
+    test_encoder_backlog();
     char p[600];
     static const char *names[] = {"flash.bin", "emmc.img", "emmc.img.extcsd"};
     for (int i = 0; i < 3; i++) { path(p, sizeof p, names[i]); unlink(p); }
