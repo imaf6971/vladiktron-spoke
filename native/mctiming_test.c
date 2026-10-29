@@ -3,19 +3,26 @@
 // app/MiniLab.swift sends them; the OS stamps them with timer 0): a lone event after a pause changes nothing, a click
 // (two events 40 ms apart) is about one step, steady events about one step each, and both ways alike (the ranges
 // are what OS 1.13 does; the OS applies steps on its own tick and speeds up on fast turns); (3) tap tempo
-// (FUNC + TEMPO) sets 120 and 150 BPM; (4) the OS never enters its exception handler. Exits 1 on any failure.
+// (FUNC + TEMPO) sets 120 and 150 BPM; (4) MIDI clock reaches the OS while a long SysEx is being sent, on TRS and USB
+// (the tempo the OS measures follows a change from 120 to 150 BPM made during the SysEx; it measures incoming clock
+// even with clock receive off, as with factory settings); (5) the OS never enters its exception handler. Exits 1 on
+// any failure.
 //   mctiming_test <main_os.bin> <flash.bin>   (on a copy of the flash and a fresh +Drive in a temporary folder)
 // DECAY's address is found by setting it over MIDI CC 80 (it differs between projects); the tempo is the 16-bit
-// BPM x 120 at 0x404ed7c2 (OS 1.13).
+// BPM x 120 at 0x404ed7c2 (OS 1.13); the incoming clock is the sum of its last 24 intervals in 135.168 MHz / 512
+// ticks at 0x40fb57d4 (read by 0x40080618, Modded-Cycles' OS map).
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include "mcboard.h"
 
 #define DDR_BASE 0x40000000u
 #define DDR_LEN 0x08000000u
 #define TEMPO_ADDR 0x404ed7c2u
+#define CLOCK_SUM_ADDR 0x40fb57d4u
 #define DECAY 3                                       // OS encoder number
 
 static mcboard *B;
@@ -32,6 +39,49 @@ static int decay(void) { uint8_t v = 0; mcb_peek(B, decay_addr, &v, 1); return v
 static int tempo_x10(void) {
     uint8_t t[2]; mcb_peek(B, TEMPO_ADDR, t, 2);
     return ((t[0] << 8 | t[1]) + 6) / 12;
+}
+
+// The tempo the OS measures from incoming MIDI clock, BPM x 10 (0 before any clock).
+static int clock_bpm_x10(void) {
+    uint8_t t[4]; mcb_peek(B, CLOCK_SUM_ADDR, t, 4);
+    uint32_t sum = (uint32_t)t[0] << 24 | t[1] << 16 | t[2] << 8 | t[3];
+    return sum ? (int)lround(1900800000.0 * 512 / 12 / sum) : 0;
+}
+
+// MIDI clock at `bpm` for `secs`, paced on the wall clock (mcb_run is real time), into the TRS or USB port; with a
+// SysEx, it is fed alongside as the app does (what the board does not take yet is sent again), from *sent on.
+static size_t (*const midi_in[2])(mcboard *, const uint8_t *, size_t) = {mcb_midi_in, mcb_usb_midi_in};
+static double now_s(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec + ts.tv_nsec / 1e9; }
+static void clock_for(int usb, double bpm, double secs, const uint8_t *sx, size_t len, size_t *sent) {
+    const uint8_t c = 0xF8;
+    double dt = 60.0 / bpm / 24, t0 = now_s();
+    for (int k = 1; k * dt <= secs; k++) {
+        if (sx && *sent < len) *sent += midi_in[usb](B, sx + *sent, len - *sent);
+        midi_in[usb](B, &c, 1);
+        double left = t0 + k * dt - now_s();
+        if (left > 0) mcb_run(B, left);
+    }
+}
+
+static void clock_during_sysex(int usb) {
+    static uint8_t sx[20000];                             // 6.4 s at 31250 baud; maker 7D (non-commercial): ignored
+    sx[0] = 0xF0; sx[1] = 0x7D;
+    for (size_t i = 2; i < sizeof sx - 1; i++) sx[i] = i & 0x7F;
+    sx[sizeof sx - 1] = 0xF7;
+    const char *port = usb ? "USB" : "TRS";
+    char what[80];
+    size_t sent = 0;
+    clock_for(usb, 120, 2, NULL, 0, NULL);
+    snprintf(what, sizeof what, "%s: clock at 120 BPM, as the OS measures it", port);
+    check(abs(clock_bpm_x10() - 1200) <= 15, what, clock_bpm_x10(), "1185..1215");
+    clock_for(usb, 150, 2, sx, sizeof sx, &sent);
+    int during = clock_bpm_x10();
+    if (!usb)
+        check(sent < sizeof sx, "TRS: the SysEx is still being sent 2 s in", (long)sent, "< 20000 bytes taken");
+    snprintf(what, sizeof what, "%s: clock changed to 150 during the SysEx", port);
+    check(abs(during - 1500) <= 15, what, during, "1485..1515");
+    while (sent < sizeof sx) clock_for(usb, 150, 1, sx, sizeof sx, &sent);
+    clock_for(usb, 150, 1, NULL, 0, NULL);                // the last of it goes through
 }
 
 // DECAY's byte: the one that follows CC 80 through 10, 77 and 33 (the first such, outside the UI's scratch copies)
@@ -118,6 +168,9 @@ int main(int argc, char **argv) {
     check(abs(tempo_x10() - 1200) <= 10, "tap tempo, 0.5 s taps (BPM x 10)", tempo_x10(), "1190..1210");
     taps(0.4);
     check(abs(tempo_x10() - 1500) <= 10, "tap tempo, 0.4 s taps (BPM x 10)", tempo_x10(), "1490..1510");
+
+    clock_during_sysex(0);
+    clock_during_sysex(1);
 
     check(mcb_os_exceptions(B) == 0, "OS exceptions", (long)mcb_os_exceptions(B), "0");
     mcb_destroy(B);
