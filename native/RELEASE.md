@@ -165,9 +165,9 @@ window hidden, with no underruns. What remains:
 - **Automated checks.** `mcusb_test`, `mcrt_test`, `mcshutdown_test` and `mctiming_test` already pass or fail. Turn `mcaudio_test`,
   `mcmidi_test` and the panel tests into checks like it (exact expectations, not printed numbers), run on every build, plus a one-hour soak
   test (audio underruns, eMMC integrity, memory).
-- **CI.** The board tests need the user's firmware, so they cannot run on a CI server. `mcunit_test` (the board's own logic, no OS)
-  and `swift test` can, with a build check: set up GitHub Actions for them. The firmware decoder (`mcfirmware.c`) also needs tests of
-  its rejection messages, with synthetic files (AUDIT.md, T1).
+- **CI.** Done (2026-10-29): GitHub Actions builds everything and runs `mcunit_test`, `mcfirmware_test` (the decoder's messages, with
+  made-up files) and `swift test` on every push and pull request. The board tests need the user's firmware, so they still run on a
+  developer's Mac only.
 - **Save and load.** `mcshutdown_test` checks that the working project survives a clean power-off. Still open:
   saving, reloading and deleting projects through the project menu, and checking that each survives a reboot.
 - **Test images.** `mcmidi_test` and `mcaudio_test` assume the OS is ready 6 s after boot. On an image left by a hard

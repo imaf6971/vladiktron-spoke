@@ -27,7 +27,9 @@ practical. `./build.sh` is clean. `./test.sh` passes: `mcunit_test` with 14 chec
 | R3 fault overlay with Restart | `8452ec2`, `4b2d59c` | `mcunit_test`: `mcb_fault` reports an unmapped access after `mcb_run` returns; `BoardProblemTests` (4). Scripted runs with snapshots: `SPOKE_TEST="6:halt,14:restart,26:quit"` showed "The Model:Cycles stopped", Restart booted it again and the quit was a clean power-off; a 1-byte flash.bin showed "could not start" with the board's message. Not covered: an OS that hangs without an exception |
 | R5 board use after free from MiniLab timers and MIDI | `da00662` | `BoardHandleTests` (3): calls stop at `close()`, `close()` waits for a call in progress, a MiniLab pad B1 tap's delayed release does nothing once closed. Scripted run: boot, Reset +Drive, halt, Restart, quit, all clean. The CoreMIDI callbacks go through the handle too, so their part of R5 is covered without having been reproduced |
 | R4 large MIDI input and SysEx out | `2757fc3`, `78ec3a3` | `mcunit_test`: both ports take what fits and say so (a 20 KB SysEx arrives whole and in order over USB); `MidiPortPairTests` (2): a 20 KB SysEx waits and arrives whole, later messages wait behind it; `MidiStreamParserTests`: a 100 KB SysEx goes out in ≤ 1 KB pieces. With the OS (scratch test): 60 KB of SysEx into each port, all taken (USB 0.1 s; TRS 18 s at 31250 baud), and a note plays afterwards on both |
-| P2 batched flash.bin saves | (this commit) | `mcunit_test`, through the SPI registers: a sector erase and 16 page programs saved flash.bin 17 times before; now none at once, one save a moment later with all of it, and a last change is still saved by `mcb_destroy`. `mcshutdown_test` passes. Not seen with the OS saving its own settings (no headless test changes one) |
+| P2 batched flash.bin saves | `661520a` | `mcunit_test`, through the SPI registers: a sector erase and 16 page programs saved flash.bin 17 times before; now none at once, one save a moment later with all of it, and a last change is still saved by `mcb_destroy`. `mcshutdown_test` passes. Not seen with the OS saving its own settings (no headless test changes one) |
+| T1 firmware decoder tests | `dda4ec3` | `mcfirmware_test`: 18 kinds of wrong file with made-up SysEx, plus the real file when present; a decoder without its checksum check fails it |
+| T3 CI | `eda0932` | `.github/workflows/ci.yml` runs `build.sh` and `test.sh` on macOS runners; rehearsed in a fresh clone with no `build/` and no `.syx` (built in 26 s, all firmware-free checks passed). **First run on GitHub not seen yet** |
 
 Left from R11: `emmc_save_ext` (not atomic), `MidiStreamParser`'s unbounded SysEx (belongs with R4), and the
 `MiniLab.rescan` thread race. `README.md`'s Pieces table doesn't list `mcunit_test` yet: it had your
@@ -229,7 +231,7 @@ No material issues for a local, unsandboxed app. Notes:
 
 ### Testing gaps
 
-**T1 — Medium, M. The firmware decoder has no tests, though it's the onboarding path every user takes.** Its
+**[done, see Progress] T1 — Medium, M. The firmware decoder has no tests, though it's the onboarding path every user takes.** Its
 rejection messages (Model:Samples, other versions, damaged checksum, truncated file, non-Elektron) can be tested
 with **synthetic** files built in the test (a SysEx header with product 0x0F, a bad checksum byte, a cut file). No
 Elektron data would be needed, so these can run anywhere, CI included.
@@ -237,7 +239,7 @@ Elektron data would be needed, so these can run anywhere, CI included.
 **[done 0709d36] T2 — Medium, S. The MIDI parsers have no tests.** `MidiStreamParser` (running status, real-time bytes inside a
 message, SysEx) and `mcb_usb_midi_in` (byte → USB-MIDI event packets; R8 is in it) are pure functions.
 
-**T3 — Medium, M. No CI.** Board tests need the user's firmware, so they can't run on GitHub. But `swift test`,
+**[done, see Progress] T3 — Medium, M. No CI.** Board tests need the user's firmware, so they can't run on GitHub. But `swift test`,
 T1 and T2 can, along with a build check (Unicorn plus `swift build`). A broken build or mapping would then show up
 on push.
 
