@@ -59,11 +59,9 @@ void uc_m68k_set_ilimit(uc_engine *uc, uint64_t limit);
 // ---------------------------------------------------------------- small helpers
 static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
 static void put_be32(uint8_t *p, uint32_t v) { p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v; }
-static double now_us(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec * 1e6 + ts.tv_nsec * 1e-3;
-}
+// (CLOCK_MONOTONIC would take macOS's slow path through gettimeofday: ~6 % of the CPU thread's busy time. The
+// uptime clock also stops while the Mac sleeps, so the board doesn't see minutes pass at once on wake.)
+static double now_us(void) { return (double)clock_gettime_nsec_np(CLOCK_UPTIME_RAW) * 1e-3; }
 static void swap32_copy(uint8_t *dst, const uint8_t *src, size_t n) {   // eSDHC little-endian transfer mode
     for (size_t i = 0; i + 3 < n; i += 4) {
         dst[i] = src[i + 3]; dst[i + 1] = src[i + 2]; dst[i + 2] = src[i + 1]; dst[i + 3] = src[i];
@@ -751,7 +749,6 @@ static void mmio_write(uc_engine *uc, uint64_t off, unsigned size, uint64_t valu
     uint32_t v = (uint32_t)value;
     (void)uc;
     io_set(b, a, size, v);
-    double t = board_time(b);
     if (size == 1 && a >= 0xEC094000u && a < 0xEC09400Cu) b->gpio_out[a - 0xEC094000u] = v;
     else if (size == 1 && a >= 0xEC094018u && a < 0xEC094024u) b->gpio_out[a - 0xEC094018u] |= v;
     else if (size == 1 && a >= 0xEC094024u && a < 0xEC094030u) b->gpio_out[a - 0xEC094024u] &= v;
@@ -776,7 +773,7 @@ static void mmio_write(uc_engine *uc, uint64_t off, unsigned size, uint64_t valu
         if (b->dspi0_n < (int)sizeof b->dspi0_rx) b->dspi0_rx[b->dspi0_n++] = flash_xfer(&b->flash, v & 0xFF);
         if (!(v >> 31)) {                                    // chip select released: the command is done
             b->flash.cmd = -1;
-            if (b->flash.dirty && !b->flash.save_due) b->flash.save_due = t + FLASH_SAVE_US;
+            if (b->flash.dirty && !b->flash.save_due) b->flash.save_due = board_time(b) + FLASH_SAVE_US;
         }
     } else if (size == 1 && ((a & 0xFFFu) == 0x01C || (a & 0xFFFu) == 0x01D) &&
                (a >> 12 == 0xFC048 || a >> 12 == 0xFC04C || a >> 12 == 0xFC050)) {
@@ -803,13 +800,14 @@ static void mmio_write(uc_engine *uc, uint64_t off, unsigned size, uint64_t valu
     } else if ((a & 0xFFFF3FFFu) == 0xFC080000u && size == 2) {
         int n = (a - 0xFC080000u) >> 14;                     // PIT PCSR: PIF w1c, program
         uint32_t pcsr = v;
+        double t = board_time(b);                            // (only the writes that need the time read the clock)
         if (pcsr & 4) { io_set(b, a, 2, pcsr & ~4u); set_line(b, 2, 13 + n, 0); }
         pit_program(b, n, t);
         pit_check(b, n, t);
     } else if ((a & 0xFFFF3FFFu) == 0xFC080002u && size == 2) {
-        pit_program(b, (a - 0xFC080000u) >> 14, t);
+        pit_program(b, (a - 0xFC080000u) >> 14, board_time(b));
     } else if ((a & 0xFFFF3FFFu) == 0xFC070000u && size == 2) {
-        dtim_program(b, (a - 0xFC070000u) >> 14, t);
+        dtim_program(b, (a - 0xFC070000u) >> 14, board_time(b));
     } else if ((a & 0xFFFF3FFFu) == 0xFC070003u && size == 1) {   // DTER w1c
         int n = (a - 0xFC070000u) >> 14;
         io_set(b, a, 1, 0);
@@ -820,7 +818,7 @@ static void mmio_write(uc_engine *uc, uint64_t off, unsigned size, uint64_t valu
             b->dma50_enabled = 1;
             b->dma50_half = 0;
             b->dma50_base = io_get(b, 0xFC045640u, 4);
-            b->dma50_due = t + BLOCK_US;
+            b->dma50_due = board_time(b) + BLOCK_US;
         }
         b->erq |= (v & 0x40) ? ~0ull : 1ull << (v & 63);
         if ((v & 0x40) == 0 && (v & 0x3F) == 37) midi_tx_dma(b);
