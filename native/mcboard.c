@@ -167,6 +167,8 @@ struct mcboard {
     uint8_t uart_rb, uart_imr;
     uint8_t midi_in[MIDI_RING], midi_out[MIDI_RING];
     atomic_uint_fast64_t min_w, min_r, mout_w, mout_r;
+    _Atomic(void (*)(void *)) midi_out_fn;   // told when MIDI OUT bytes arrive (mcb_on_midi_out)
+    _Atomic(void *) midi_out_ctx;
     uint8_t midi_rt[MIDI_RT_RING];          // real-time bytes in, sent ahead of what waits in midi_in (MIDI allows
     atomic_uint_fast64_t mrt_w, mrt_r;      // them between any two bytes, inside SysEx too)
     double midi_rx_due;
@@ -700,6 +702,10 @@ static void usb_microframes(mcboard *b, double t, int chained);
 static uint32_t usb_reg_read(mcboard *b, uint32_t o);
 static void usb_reg_write(mcboard *b, uint32_t o, uint32_t v);
 static void dma_irq_line(mcboard *b, int ch);
+static void midi_out_notify(mcboard *b) {
+    void (*fn)(void *) = atomic_load(&b->midi_out_fn);
+    if (fn) fn(atomic_load(&b->midi_out_ctx));
+}
 static uint64_t mmio_read(uc_engine *uc, uint64_t off, unsigned size, void *user) {
     mcboard *b = ((mcboard **)user)[0];
     uint32_t a = (uint32_t)(uintptr_t)((void **)user)[1] + (uint32_t)off;
@@ -756,6 +762,7 @@ static void mmio_write(uc_engine *uc, uint64_t off, unsigned size, uint64_t valu
         uint64_t w = atomic_load(&b->mout_w);
         if (w - atomic_load(&b->mout_r) < MIDI_RING) { b->midi_out[w & (MIDI_RING - 1)] = (uint8_t)v; atomic_store(&b->mout_w, w + 1); }
         b->n_midi_out++;
+        midi_out_notify(b);
     } else if (a == UART9 + 0x14 && size == 1) {             // UIMR: TxRDY interrupt -> INTC1 source 53
         b->uart_imr = (uint8_t)v;
         set_line(b, 1, 53, v & 1);
@@ -1361,6 +1368,7 @@ static void usb_host(mcboard *b, double t) {
             atomic_store(&b->usb.out_w, w);
             b->usb.n_out += (uint64_t)k;
         }
+        if (n >= 4) midi_out_notify(b);
     }
     if (b->usb.midi_out_ep) {
         uint64_t r = atomic_load(&b->usb.ev_r), w = atomic_load(&b->usb.ev_w);
@@ -1865,6 +1873,11 @@ size_t mcb_midi_in(mcboard *b, const uint8_t *data, size_t n) {
     return i;
 }
 
+void mcb_on_midi_out(mcboard *b, void (*fn)(void *ctx), void *ctx) {
+    atomic_store(&b->midi_out_fn, NULL);
+    atomic_store(&b->midi_out_ctx, ctx);
+    atomic_store(&b->midi_out_fn, fn);
+}
 size_t mcb_midi_out(mcboard *b, uint8_t *out, size_t max) {
     uint64_t r = atomic_load(&b->mout_r), w = atomic_load(&b->mout_w);
     size_t n = 0;

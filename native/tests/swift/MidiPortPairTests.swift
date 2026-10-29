@@ -22,6 +22,23 @@ final class MidiPortPairTests: XCTestCase {
         XCTAssertEqual(got, sysex)
     }
 
+    func testBytesLeftWaitingAskForAFlushUntilAllAreIn() {
+        // (Nothing polls while MIDI is quiet: MidiPort retries only when told something waits.)
+        var got: [UInt8] = [], asked = 0
+        let p = pair(room: 10) { got += $0 }
+        p.onWaiting = { asked += 1 }
+        p.send([0x90, 60, 100])
+        XCTAssertEqual(asked, 0, "all taken at once: nothing to retry")
+        let sysex: [UInt8] = [0xF0] + [UInt8](repeating: 0x11, count: 30) + [0xF7]
+        p.send(sysex)
+        XCTAssertEqual(asked, 1)
+        var flushes = 0
+        while p.flush() { flushes += 1 }
+        XCTAssertEqual(got, [0x90, 60, 100] + sysex)
+        XCTAssertEqual(flushes, 2, "22 bytes waited, 10 go in per flush: the third says nothing waits any more")
+        XCTAssertFalse(p.flush())
+    }
+
     func testLaterMessagesWaitBehindEarlierOnes() {
         var got: [UInt8] = []
         let p = pair(room: 10) { got += $0 }

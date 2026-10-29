@@ -21,6 +21,8 @@ final class MidiPortPair {
     private var waitingRealTime: [UInt8] = []
     static let waitingLimit = 16 << 20             // past this much waiting, new bytes are dropped (and logged)
     private var parser = MidiStreamParser()
+    /// Told when bytes are left waiting, so the owner flushes them soon (MidiPort: within a millisecond).
+    var onWaiting: (() -> Void)?
     fileprivate var source = MIDIEndpointRef()
     fileprivate var destination = MIDIEndpointRef()
 
@@ -47,6 +49,7 @@ final class MidiPortPair {
             if byte >= 0xF8 { waitingRealTime.append(byte) } else { waiting.append(byte) }
         }
         flushRealTime()
+        onWaiting?()
     }
 
     private func flushRealTime() {                 // (under `lock`)
@@ -55,17 +58,20 @@ final class MidiPortPair {
         waitingRealTime.removeFirst(n)
     }
 
-    /// Feeds the board what waits, as far as it has room (the MIDI timer calls this every millisecond).
-    func flush() {
+    /// Feeds the board what waits, as far as it has room (MidiPort calls this every millisecond while anything
+    /// waits). Returns whether something still waits.
+    @discardableResult
+    func flush() -> Bool {
         lock.lock(); defer { lock.unlock() }
         flushRealTime()
-        guard waitingFrom < waiting.count else { return }
+        guard waitingFrom < waiting.count else { return !waitingRealTime.isEmpty }
         waitingFrom += waiting.withUnsafeBufferPointer { inject($0.baseAddress! + waitingFrom, $0.count - waitingFrom) }
         if waitingFrom == waiting.count {
             waiting.removeAll(keepingCapacity: true); waitingFrom = 0
         } else if waitingFrom > 65536 && waitingFrom * 2 > waiting.count {
             waiting.removeFirst(waitingFrom); waitingFrom = 0
         }
+        return waitingFrom < waiting.count || !waitingRealTime.isEmpty
     }
     func send(_ bytes: [UInt8]) { bytes.withUnsafeBufferPointer { send($0.baseAddress!, $0.count) } }
 
@@ -79,10 +85,14 @@ final class MidiPortPair {
         }
     }
 
-    fileprivate func pump(_ buf: UnsafeMutablePointer<UInt8>, _ cap: Int) {
-        flush()
-        let n = drain(buf, cap)
-        for i in 0..<n { if let msg = parser.feed(buf[i]) { emit(msg) } }
+    /// Feeds the board what waits and sends on everything it has sent. Returns whether input still waits.
+    fileprivate func pump(_ buf: UnsafeMutablePointer<UInt8>, _ cap: Int) -> Bool {
+        let more = flush()
+        while true {
+            let n = drain(buf, cap)
+            for i in 0..<n { if let msg = parser.feed(buf[i]) { emit(msg) } }
+            if n < cap { return more }
+        }
     }
 
     private func emit(_ msg: [UInt8]) {
@@ -107,8 +117,15 @@ final class MidiPortPair {
 final class MidiPort {
     private var client = MIDIClientRef()
     private var pairs: [MidiPortPair] = []
-    private var timer: DispatchSourceTimer?
+    private var board: BoardHandle?
+    private var wake: MidiWake?
     private let queue = DispatchQueue(label: "Vladiktron Spoke MIDI out", qos: .userInteractive)
+
+    /// What the board pokes when its MIDI OUT has bytes (mcb_on_midi_out, from the CPU thread: one atomic merge).
+    private final class MidiWake {
+        let source: DispatchSourceUserDataOr
+        init(queue: DispatchQueue) { source = DispatchSource.makeUserDataOrSource(queue: queue) }
+    }
     private(set) var controller: MiniLab?
 
     func start(board h: BoardHandle, panel: MiniLab.Panel, onControllerChange: @escaping (String?) -> Void) {
@@ -129,18 +146,33 @@ final class MidiPort {
         for p in pairs { p.create(client: client) }
         lab.attach(client: client, ownSources: pairs.map(\.source))
 
-        // Every millisecond: feed the board what waits, and drain its MIDI OUT, so clock bytes keep their timing.
-        let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now(), repeating: .milliseconds(1), leeway: .microseconds(200))
+        // Nothing polls while MIDI is quiet (a 1 ms timer used to wake the Mac 1,000 times a second, which costs
+        // battery). The board pokes `wake` as the OS sends MIDI OUT bytes, which go on at once; input the board had
+        // no room for is retried every millisecond until it is all in.
+        let wake = MidiWake(queue: queue)
+        let source = wake.source, queue = self.queue
         let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: 1024)
-        t.setEventHandler { [pairs] in for p in pairs { p.pump(buf, 1024) } }
-        t.resume()
-        timer = t
+        source.setEventHandler { [pairs] in
+            var waiting = false
+            for p in pairs where p.pump(buf, 1024) { waiting = true }
+            if waiting { queue.asyncAfter(deadline: .now() + .milliseconds(1)) { source.or(data: 1) } }
+        }
+        source.resume()
+        for p in pairs { p.onWaiting = { source.or(data: 1) } }
+        // (retained for good: the CPU thread may still be inside a call with it just after mcb_on_midi_out(nil))
+        let ctx = Unmanaged.passRetained(wake).toOpaque()
+        h.with { mcb_on_midi_out($0, { ctx in Unmanaged<MidiWake>.fromOpaque(ctx!).takeUnretainedValue().source.or(data: 1) }, ctx) }
+        board = h
+        self.wake = wake
+        source.or(data: 1)                                                  // anything sent before we listened
     }
 
     func stop() {
-        timer?.cancel()
-        timer = nil
+        board?.with { mcb_on_midi_out($0, nil, nil) }
+        board = nil
+        for p in pairs { p.onWaiting = nil }
+        wake?.source.cancel()
+        wake = nil
         queue.sync {}                                                   // a running drain finishes first
         controller?.detach()
         for p in pairs { p.dispose() }

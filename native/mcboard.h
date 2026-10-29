@@ -87,6 +87,10 @@ size_t mcb_midi_out(mcboard *b, uint8_t *out, size_t max);
 // mcb_usb_state: 0 not connected, 1 enumerating, 2 configured, -1 the device stopped answering.
 size_t mcb_usb_midi_in(mcboard *b, const uint8_t *data, size_t n);       // bytes taken, as mcb_midi_in
 size_t mcb_usb_midi_out(mcboard *b, uint8_t *out, size_t max);
+// Calls fn(ctx) on the CPU thread whenever the OS has just queued MIDI OUT bytes (either port), so a reader can
+// wait instead of polling; fn must be quick and must not call into the board. NULL stops it. A call already under
+// way may still use the old ctx just after this returns: keep it alive as long as the board.
+void mcb_on_midi_out(mcboard *b, void (*fn)(void *ctx), void *ctx);
 int mcb_usb_state(mcboard *b);
 
 // USB audio (as a class-compliant 48 kHz stereo interface would stream it), each direction on when asked:
