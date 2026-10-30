@@ -1,6 +1,6 @@
 # Road to a release
 
-Last checked against the code on 2026-10-30. Version today: 0.1.0. There are no releases yet.
+Last checked against the code on 2026-10-30. Latest release: [v0.1.0](https://github.com/imaf6971/vladiktron-spoke/releases/tag/v0.1.0).
 
 ## Where things stand
 
