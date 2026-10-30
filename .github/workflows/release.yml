@@ -1,0 +1,33 @@
+# On a version tag (v0.1.0): runs the checks that need no firmware, then publishes the app's zip as a GitHub release.
+# The tag must match the version in app/Resources/Info.plist. GitHub adds the source archive the GPL asks for.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the zip
+        run: ./dist.sh
+      - name: Checks that need no firmware
+        run: ./test.sh
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          ZIP="build/Vladiktron-Spoke-$VERSION.zip"
+          test -f "$ZIP" || { echo "$GITHUB_REF_NAME does not match Info.plist"; exit 1; }
+          gh release create "$GITHUB_REF_NAME" "$ZIP" --title "Vladiktron Spoke $VERSION" \
+            --notes "See [CHANGELOG.md](CHANGELOG.md) for changes and the README for how to install."
+      - name: Logs
+        if: failure()
+        run: tail -n 60 build/*.log

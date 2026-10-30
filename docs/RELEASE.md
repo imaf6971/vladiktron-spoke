@@ -1,6 +1,6 @@
 # Road to a release
 
-Last checked against the code on 2026-10-30. Version today: 0.1 (1). There are no releases yet.
+Last checked against the code on 2026-10-30. Version today: 0.1.0. There are no releases yet.
 
 ## Where things stand
 
@@ -24,14 +24,14 @@ Last checked against the code on 2026-10-30. Version today: 0.1 (1). There are n
 ### Distribution
 Releases are zips of the app on the GitHub Releases page.
 
-- [ ] Zip the app with `ditto`, which keeps its signature, and attach it to a release at a version tag:
-  ```bash
-  ditto -c -k --keepParent "build/Vladiktron Spoke.app" Vladiktron-Spoke-<version>.zip
-  ```
-- [ ] Explain in the README how to open a downloaded app: macOS blocks it at first, so go to System Settings → Privacy
-  & Security → Open Anyway.
-- [ ] Decide a version number scheme.
-- [ ] Write a CHANGELOG.
+To make one:
+
+1. Set the version in `app/Resources/Info.plist`, as `major.minor.patch`.
+2. Add it to `CHANGELOG.md` and commit.
+3. Tag it (`git tag v0.1.0`) and push the tag (`git push origin v0.1.0`).
+
+The `release.yml` workflow then runs `dist.sh` and the firmware-free checks, and publishes the zip. To make the same
+zip locally, run `./dist.sh`.
 
 GPL-2.0 requires the source with each binary. Unicorn is vendored, so the source archive GitHub adds to each release
 at its tag is the complete source.

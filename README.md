@@ -30,8 +30,18 @@ Not a lookalike synth: the real OS 1.13 boots, draws the screen, runs the sequen
 
 ## Getting started
 
-There is no download yet, so build it from source. You need an Apple Silicon Mac with macOS 14 or later, the Xcode
-command line tools and CMake. Everything else is in this repository.
+You need an Apple Silicon Mac with macOS 14 or later.
+
+### Download
+
+1. Get the zip from the [latest release](https://github.com/imaf6971/vladiktron-spoke/releases/latest), unzip it and
+   move the app to Applications.
+2. Open it. macOS blocks it the first time, because the app isn't notarised.
+3. Go to **System Settings → Privacy & Security** and click **Open Anyway**.
+
+### Build from source
+
+You need the Xcode command line tools and CMake. Everything else is in this repository.
 
 ```bash
 git clone https://github.com/imaf6971/vladiktron-spoke.git
@@ -45,9 +55,12 @@ cd vladiktron-spoke && ./build.sh
 open "build/Vladiktron Spoke.app"
 ```
 
-On first run, choose or drop `model-cycles_OS1.13.zip`, or the `.syx` inside it, on the window. Only Elektron's
-original OS 1.13 is accepted. If you already have the `.syx`, `./build.sh model-cycles_OS1.13.syx` installs it during
-the build.
+If you already have the `.syx`, `./build.sh model-cycles_OS1.13.syx` installs it during the build.
+
+### First run
+
+Choose or drop `model-cycles_OS1.13.zip`, or the `.syx` inside it, on the window. Only Elektron's original OS 1.13 is
+accepted.
 
 ## Playing it
 
@@ -133,7 +146,7 @@ Everything lives in `~/Library/Application Support/Vladiktron Spoke/`. **Model:C
   is in no OS update. Your own presets save and load normally.
 - **Other apps don't see an audio device.** USB audio goes through a device you choose, not a "Model:Cycles" audio
   device, so a DAW needs a loopback device.
-- **Apple Silicon only, and not notarised.** Build it yourself for now.
+- **Apple Silicon only, and not notarised.** macOS asks you to approve the app once.
 - **Tested on macOS 27 only.** It is built for macOS 14 and later, but hasn't been run on anything older.
 - **Some hardware isn't modelled:** battery level, auto-off and headphone detect.
 
