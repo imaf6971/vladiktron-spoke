@@ -1,6 +1,7 @@
 # Plan: the board on its own clock
 
-Written 2026-10-29. No code has changed for this yet. Each phase below is a separate, mergeable step that keeps
+Written 2026-10-29. Phases 0 and 1 are on `main`; phase 2 is parked (see the status at the end). The plan below is
+as written, so its "today" means before those phases. Each phase below is a separate, mergeable step that keeps
 the app working, with a check that has to pass before the next one starts.
 
 ## Why
@@ -96,7 +97,7 @@ K is part of the model now. It decides how much emulated time the OS's own work 
 audio block, servicing the 12 kHz panel scan, formatting the +Drive. Today the JIT runs the OS as fast as the Mac
 allows, so that work takes almost no emulated time at all, which is not what the hardware does either.
 
-The MCF54418 runs at 250 MHz. Phase 0 measures how many instructions the OS executes per audio block and per
+The MCF54415 runs at 250 MHz. Phase 0 measures how many instructions the OS executes per audio block and per
 second while playing, then picks K so that:
 
 - the OS's work fits its own deadlines with the margin the real unit has (a block is 667 µs), and
@@ -266,5 +267,7 @@ bit-exact in both directions; tap tempo and knob checks unchanged; the same chec
     microframe code; not yet known whether the thread was descheduled or the code was slow).
   - **Boot**: the OS is 100 % busy for the first second, so at K = 250 the Mac must run 250 M instructions a
     second to keep up, and only just does (18–20 ms behind).
+- **Since then**: the watchdog thread left `main` on its own: slices end on an instruction budget while the board
+  stays on the Mac's clock (`PERFORMANCE_FINDINGS.md`, F8).
 - **To pick it up again**: run ahead by an IO period (phase 6's idea) is the likely fix for the CPU cost; measure
   thread CPU time against host time for the long slices first.

@@ -1,5 +1,8 @@
 # Audit — 2026-10-28
 
+A snapshot: file and line references, test counts and open findings are as of the audit. For what is still open
+today, see `RELEASE.md`.
+
 Scope: everything except the vendored Unicorn (`vendor/unicorn`, read only where this project's code depends on its
 behaviour). About 6,300 lines: `mcboard.c` (1,874), the Swift app in `app/` (1,970), `mcfirmware.c`, the command-line
 tools and tests.

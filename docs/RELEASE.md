@@ -1,12 +1,12 @@
 # What's left for a full release
 
-State on 2026-10-27: the Model:Cycles OS 1.13 boots and runs in real time. The screen, keys, knobs, pads, LEDs and
+State on 2026-10-30: the Model:Cycles OS 1.13 boots and runs in real time. The screen, keys, knobs, pads, LEDs and
 audio out all work. So do MIDI over the TRS jacks and over USB (as CoreMIDI ports), USB audio both ways (routed to
 Mac audio devices), and an Arturia MiniLab 3 can play it. Quitting is a clean power-off through the OS's own power-key
 path (`mcshutdown_test` checks that the project survives it), and the app menu has Reset +Drive, Factory reset and
 Reveal Data Folder. On first run the app installs the OS from the user's own `.syx` or Elektron's `.zip`
-(`mcfirmware.c`), checking it is the original 1.13. The CPU thread sleeps while the OS idles, so the app takes about a third of one core
-instead of all of it. Everything below is still open, ordered by how much it blocks a release.
+(`mcfirmware.c`), checking it is the original 1.13. The CPU thread sleeps while the OS idles, so the app takes about 14 % of one core
+at idle instead of all of it. Everything below is still open, ordered by how much it blocks a release.
 
 ## 1. Release blockers
 
@@ -62,7 +62,8 @@ What remains:
   Spoke.zip --keychain-profile <profile> --wait` and `xcrun stapler staple "build/Vladiktron Spoke.app"`.
 - **The USB Audio input under the hardened runtime** has its entitlement, but has not been tried with a real input
   since (macOS asks for microphone access again, under the new bundle ID).
-- **Architectures:** tested only on Apple Silicon (M4 Pro), macOS 14+. The build is arm64 only; Intel would need a
+- **Architectures:** tested only on Apple Silicon (M4 Pro, macOS 27). It is built for macOS 14+ but has not been run
+  on anything older. The build is arm64 only; Intel would need a
   second Unicorn build and `lipo`, and a test. Otherwise say "Apple Silicon only".
 - **A DMG or zip** for downloads, and a version number scheme (`Info.plist` says 0.1 (1)).
 
@@ -89,7 +90,7 @@ sample for sample. What remains:
 - **Fixed USB slice.** While USB audio streams, the CPU runs in 125 µs slices (one microframe) instead of 1 ms:
   about 6200 slices/s instead of 800, and the microframes take about 3–8 ms of host time per second (M4 Pro,
   `MCB_RTLOG=1`). With nothing routed, microframes take ~0.15 ms/s. Since the idle sleep, streaming costs
-  about the same CPU as not streaming (`mcrt_test`: 26 % against 23 %).
+  about the same CPU as not streaming (`mcrt_test`: 15 % against 13 %).
 - **Two engines on one device.** Routing *Model:Cycles to* the same device as the main output (MacBook Pro
   Speakers, say) plays the mix twice, a few ms apart: it sounds louder and comb-filtered. Nothing breaks (both
   queues keep their cushion), but the menu could warn about it, or leave out the main output's device.
@@ -111,26 +112,27 @@ sample for sample. What remains:
   read as a DA7210's: -54 dB in 1.5 dB steps, knob down = mute, knob up = the mix at 0 dB). The step size comes
   from the register layout, not a measurement. Compare levels against a real unit: main volume, the headphone path, and the codec
   registers the OS writes over I2C (`MCB_CODECLOG=1`). Check full scale and clipping.
-- **Audio device choice.** Pick the output device and buffer size in Settings, instead of the system default only.
+- **Buffer size.** The output device is chosen in Settings; the buffer size is still fixed.
 - **Latency.** Measure end to end (pad click → sound) and document it. Trim the cushion if the clock work allows.
 
 ### CPU and power
 Done: the CPU thread sleeps while the OS idles in its background loop (`IDLE_PC`, 125–250 µs at a time). Two
 Unicorn patches cut what the OS costs to run: RAM stores without code on their page take the fast path again, and
 the JIT stays executable for a whole run. The app opts out of App Nap (`beginActivity`, idle system sleep still
-allowed). On an M4 Pro: the board alone goes from 100 % to about 22 % of a core idle and 23 % playing
-(`mcrt_test`, no block more than 1.6 ms late). The whole app goes from ~97 % to about 33 % idle, the same with the
-window hidden, with no underruns. What remains:
+allowed). DMA now copies RAM directly, the ColdFire multiply-accumulate is JIT code, slices end on an instruction
+budget with no watchdog thread, and MIDI needs no 1 kHz timer. On an M4 Pro: the board alone takes about 13 % of a core
+playing, 15 % with USB audio on (`mcrt_test`, no late or repeated blocks). The whole app takes about 14 % idle with its
+window in the background, down from ~97 % at the start. Details: `PERFORMANCE_FINDINGS.md`. What remains:
 - **Battery.** Measure power on battery (`powermetrics`) and fan noise in a long session; the 12 kHz panel scan
-  and 1500 audio blocks a second still wake the CPU thread several thousand times a second.
+  and 1500 audio blocks a second still mean about 6,300 context switches a second.
 - **Less work per interrupt.** Each interrupt costs a TB-state restore (`cpu_restore_state`, ~7 % of the CPU
   thread's time) and the vector fetch goes through the slow load path. Unicorn changes, if more is needed.
 - **Hidden-window MIDI timing.** Audio was checked with the app launched hidden (no underruns); MIDI clock
   timing with the window hidden still needs a test with real gear.
 
 ### MIDI
-- **Sending timing.** Outgoing MIDI is collected every 1 ms and sent "now". Timestamp bytes with the time they left
-  the UART or USB, for steadier clock out.
+- **Sending timing.** The board tells the app when the OS queues MIDI OUT bytes (`mcb_on_midi_out`), and they are
+  sent "now". Timestamp bytes with the time they left the UART or USB, for steadier clock out.
 - **The empty SysEx keepalive.** The OS sends empty SysEx (`F0 F7`) packets over USB; the real unit does too. Check
   how DAWs react, and filter them if they cause trouble.
 - **Cable unplug.** There is no "unplug the USB cable" at runtime. Add it (VBUS off → the OS's detach path) and
@@ -149,9 +151,11 @@ window hidden, with no underruns. What remains:
 - **Other controllers.** A small Settings screen to choose the controller and learn CCs, so it isn't hard-coded.
 
 ### App and UI
-- **Settings window:** audio device, MIDI port names, controller mapping, USB connected / unplugged.
-- **Menus:** Reset (a power cycle), About (licences), Help (keyboard, mouse and MiniLab controls). Install OS…,
-  Reset +Drive, Factory reset and Reveal Data Folder are done; their dialogs have not been clicked through in a scripted test yet.
+- **Settings window:** done for the main output, the USB audio routes and the data folder (⌘,). Still to add: MIDI
+  port names, controller mapping, USB connected / unplugged.
+- **Menus:** Reset (a power cycle) and Help for the keyboard, mouse and MiniLab controls are still to add. About,
+  Licences, Source Code, Install OS…, Reset +Drive, Factory reset and Reveal Data Folder are done; the dialogs have
+  not been clicked through in a scripted test yet.
 - **Quitting takes about 2 s** (the OS needs the power key held for 13 polls before it shuts down). It could be shorter
   by setting the OS's own "power off now" flag (0x40a74560, set at 0x4005398c and checked at 0x400538f4), which
   skips the wait. That would mean writing OS memory instead of pressing a key.
@@ -175,8 +179,8 @@ window hidden, with no underruns. What remains:
 - **Automated checks.** `mcusb_test`, `mcrt_test`, `mcshutdown_test` and `mctiming_test` already pass or fail. Turn `mcaudio_test`,
   `mcmidi_test` and the panel tests into checks like it (exact expectations, not printed numbers), run on every build, plus a one-hour soak
   test (audio underruns, eMMC integrity, memory).
-- **CI.** Done (2026-10-29): GitHub Actions builds everything and runs `mcunit_test`, `mcfirmware_test` (the decoder's messages, with
-  made-up files) and `swift test` on every push and pull request. The board tests need the user's firmware, so they still run on a
+- **CI.** Done (2026-10-29): GitHub Actions builds everything and runs `mcunit_test`, `mcemac_test`, `mcfirmware_test` (the decoder's messages,
+  with made-up files) and `swift test` on every push and pull request. The board tests need the user's firmware, so they still run on a
   developer's Mac only.
 - **Save and load.** `mcshutdown_test` checks that the working project survives a clean power-off. Still open:
   saving, reloading and deleting projects through the project menu, and checking that each survives a reboot.

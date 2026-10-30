@@ -1,6 +1,7 @@
 # Performance findings — 2026-10-29
 
-Research only: no project code was changed. Experiments ran on throwaway copies in a scratch folder.
+The findings were research on throwaway copies in a scratch folder. The results section just below records what was
+then implemented; the rest describes the code before those changes.
 
 **Goal (confirmed):** lower CPU **while playing**, and **battery life**, with no audible change. Build time, memory
 and launch time are secondary and were not looked at in depth.
