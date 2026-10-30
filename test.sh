@@ -4,7 +4,7 @@
 # decoder with made-up files (build/bin/mcfirmware_test; it also checks model-cycles_OS1.13.syx if there), no firmware needed,
 # the MiniLab 3 mapping (swift test, a few seconds) and the timing the OS
 # sees past the first timer wrap (build/bin/mctiming_test, about a minute; needs build/main_os.bin and build/flash.bin from
-# your .syx). The other mc*_test tools are run by hand (README.md).
+# your .syx). The other mc*_test tools are run by hand (docs/DEVELOPMENT.md).
 set -e
 cd "$(dirname "$0")"
 mkdir -p build
