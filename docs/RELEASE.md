@@ -22,25 +22,19 @@ Last checked against the code on 2026-10-30. Version today: 0.1 (1). There are n
 ## 1. Needed for a first release
 
 ### Distribution
-- [ ] Get a paid Apple Developer account, which the two items below need.
-- [ ] Sign with Developer ID: `SIGN_ID="Developer ID Application: …" ./build.sh` already adds the secure timestamp.
-- [ ] Notarise and staple:
+Releases are zips of the app on the GitHub Releases page.
+
+- [ ] Zip the app with `ditto`, which keeps its signature, and attach it to a release at a version tag:
   ```bash
-  ditto -c -k --keepParent "build/Vladiktron Spoke.app" Spoke.zip
+  ditto -c -k --keepParent "build/Vladiktron Spoke.app" Vladiktron-Spoke-<version>.zip
   ```
-  ```bash
-  xcrun notarytool submit Spoke.zip --keychain-profile <profile> --wait
-  ```
-  ```bash
-  xcrun stapler staple "build/Vladiktron Spoke.app"
-  ```
-- [ ] Make a DMG or zip for downloads, and decide a version number scheme.
-- [ ] Attach the source to every release, because GPL-2.0 requires it. Unicorn is vendored, so the repository at the
-  release tag is the complete source:
-  ```bash
-  git archive --format=zip -o vladiktron-spoke-<version>-source.zip <tag>
-  ```
+- [ ] Explain in the README how to open a downloaded app: macOS blocks it at first, so go to System Settings → Privacy
+  & Security → Open Anyway.
+- [ ] Decide a version number scheme.
 - [ ] Write a CHANGELOG.
+
+GPL-2.0 requires the source with each binary. Unicorn is vendored, so the source archive GitHub adds to each release
+at its tag is the complete source.
 
 ### Must be tried at least once
 - [ ] Run on a real macOS 14 Mac. It is built for 14 but has only run on macOS 27.
@@ -54,6 +48,7 @@ Last checked against the code on 2026-10-30. Version today: 0.1 (1). There are n
 - [ ] Play for an hour on battery with `powermetrics`, and listen for the fans.
 
 ### Decided, keep it true
+- **No App Store, no Developer ID.** The app stays ad hoc signed and is not notarised.
 - **Elektron's firmware stays the user's.** The app never bundles or downloads it.
 - **The names stay.** "Model:Cycles" and "Elektron" only say which device's OS the app runs, as Modded-Cycles does. The
   app's own name is Vladiktron Spoke. App Store and music software names were checked; trademark registers were not.

@@ -133,7 +133,7 @@ Everything lives in `~/Library/Application Support/Vladiktron Spoke/`. **Model:C
   is in no OS update. Your own presets save and load normally.
 - **Other apps don't see an audio device.** USB audio goes through a device you choose, not a "Model:Cycles" audio
   device, so a DAW needs a loopback device.
-- **The app is not notarised yet, and Apple Silicon only.** Build it yourself for now.
+- **Apple Silicon only, and not notarised.** Build it yourself for now.
 - **Tested on macOS 27 only.** It is built for macOS 14 and later, but hasn't been run on anything older.
 - **Some hardware isn't modelled:** battery level, auto-off and headphone detect.
 
