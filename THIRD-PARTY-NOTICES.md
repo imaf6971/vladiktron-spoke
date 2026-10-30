@@ -5,9 +5,9 @@ the following. Elektron's firmware is not part of it: the app installs it from t
 
 | Component | Where | Licence |
 |---|---|---|
-| [Unicorn](https://www.unicorn-engine.org/) 2.1.4 (Nguyen Anh Quynh, Dang Hoang Vu and the Unicorn contributors), with QEMU code inside | Linked statically into the app and the command-line tools. Fetched by `native/build.sh` and changed by `native/patch_unicorn.py` | GPL-2.0 (`LICENSE`); its GLib parts LGPL-2.0 ([COPYING_GLIB](https://github.com/unicorn-engine/unicorn/blob/2.1.4/COPYING_GLIB)) |
-| [Modded-Cycles](https://github.com/18nelli18/Modded-Cycles) (18nelli18 and contributors) | `native/mcengine.c` (a C port of its `mcengine.py`), the EMAC model in `native/patch_unicorn.py` (after its `emac.py`), OS 1.13 addresses in `native/mcboard.c`, and `native/mcfirmware.c` (after its `mtlib`) | MIT |
-| [elektron-model-tweaks](https://github.com/drumkilla/elektron-model-tweaks) (drumkilla) | `mtlib`, the SysEx, container and aPLib-variant code `native/mcfirmware.c` is ported from | MIT |
+| [Unicorn](https://www.unicorn-engine.org/) 2.1.4 (Nguyen Anh Quynh, Dang Hoang Vu and the Unicorn contributors), with QEMU code inside | Linked statically into the app and the command-line tools. Fetched by `build.sh` and changed by `tools/scripts/patch_unicorn.py` | GPL-2.0 (`LICENSE`); its GLib parts LGPL-2.0 ([COPYING_GLIB](https://github.com/unicorn-engine/unicorn/blob/2.1.4/COPYING_GLIB)) |
+| [Modded-Cycles](https://github.com/18nelli18/Modded-Cycles) (18nelli18 and contributors) | `tools/mcengine.c` (a C port of its `mcengine.py`), the EMAC model in `tools/scripts/patch_unicorn.py` (after its `emac.py`), OS 1.13 addresses in `src/mcboard.c`, and `src/mcfirmware.c` (after its `mtlib`) | MIT |
+| [elektron-model-tweaks](https://github.com/drumkilla/elektron-model-tweaks) (drumkilla) | `mtlib`, the SysEx, container and aPLib-variant code `src/mcfirmware.c` is ported from | MIT |
 | [elektron-firmware-tool](https://github.com/mischa85/elektron-firmware-tool) (Marcel Bierling) | The basis of `mtlib`'s container and codec code | MIT |
 
 The source for this app, including the Unicorn patches, is at https://github.com/imaf6971/vladiktron-spoke.

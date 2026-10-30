@@ -1,5 +1,5 @@
 // Installs the firmware the virtual board runs from your own OS update file, the same way the app does.
-//   ./mcinstall <model-cycles_OS1.13.syx> <dir>
+//   build/bin/mcinstall <model-cycles_OS1.13.syx> <dir>
 // Writes <dir>/main_os.bin and <dir>/flash.factory.bin, and <dir>/flash.bin if there is none yet.
 #include <stdio.h>
 

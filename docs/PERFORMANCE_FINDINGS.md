@@ -46,8 +46,8 @@ want more.
 
 The app idles at **~27 % of one core** (M4 Pro, steady from 12 s after launch to 72 s). Almost all of it is one
 thread, "Model:Cycles CPU", which runs Elektron's OS through the Unicorn JIT. The main thread (SwiftUI) takes
-~2.5 %, and the 1 kHz MIDI pump ~0.5 %. So the gains are in the board (`native/mcboard.c`) and in the vendored
-Unicorn (`native/vendor/unicorn`), not in the Swift app.
+~2.5 %, and the 1 kHz MIDI pump ~0.5 %. So the gains are in the board (`src/mcboard.c`) and in the vendored
+Unicorn (`vendor/unicorn`), not in the Swift app.
 
 While the CPU thread is awake, its time splits roughly like this (headless profile while playing, 2,367 busy
 samples):
@@ -71,7 +71,7 @@ helpers ~25 %. Treat the absolute numbers as ±5 points.
 
 | Measurement | Command | Result |
 |---|---|---|
-| Board alone, playing | `MCB_RTLOG=1 ./mcrt_test build/main_os.bin <copy of flash.bin> <scratch emmc.img> 15` | 24 % off / 28 % USB audio on / 24 % off again; 0 late blocks |
+| Board alone, playing | `MCB_RTLOG=1 build/bin/mcrt_test build/main_os.bin <copy of flash.bin> <scratch emmc.img> 15` | 24 % off / 28 % USB audio on / 24 % off again; 0 late blocks |
 | Same, 2 more rounds (10 s phases) | same, 10 | 27/31/27 and 22/25/22: **the same build varies by 5 points between runs** |
 | Board activity | `MCB_RTLOG` lines | ~5,000 slices/s, ~110 M guest instructions/s, slept ~600 ms of every second |
 | Profile while playing | `sample <pid> 10` during phase 1 of `mcrt_test` | table above |
@@ -94,15 +94,15 @@ Impact is the share of the CPU thread's busy time a fix could remove; the idle a
 
 | # | Issue | Location | Impact | Effort | Risk | Confidence |
 |---|---|---|---|---|---|---|
-| F1 | DMA copies go 4 bytes at a time through `uc_mem_read`/`uc_mem_write` | `native/mcboard.c:976-1066` (`bus_read`, `bus_write`, `dma_run`) | **High** (10 % busy playing; the biggest item at boot) | S–M | Medium | High (measured) |
+| F1 | DMA copies go 4 bytes at a time through `uc_mem_read`/`uc_mem_write` | `src/mcboard.c:976-1066` (`bus_read`, `bus_write`, `dma_run`) | **High** (10 % busy playing; the biggest item at boot) | S–M | Medium | High (measured) |
 | F2 | The ColdFire MAC is an out-of-line helper that forces TCG to spill registers | `vendor/unicorn/qemu/target/m68k/op_helper.c:1005`, `helper.h` (`DEF_HELPER_4(cfmac…)`), `translate.c:5758` | **High** (13 % busy) | M | Medium | High on cost, medium on the gain |
 | F3 | Every interrupt exits through a full TB state restore; the vector fetch takes the slow load path | `vendor/unicorn/qemu/accel/tcg/tcg-runtime.c` (`HELPER(check_exit_request)`), m68k `do_interrupt_all` | Medium (~17 % busy is interrupt overhead; maybe half removable) | M–L | Medium–High | Medium |
-| F4 | `now_us()` uses `CLOCK_MONOTONIC`, which on macOS takes a slow `gettimeofday` path; MMIO writes read the clock even when they don't need it | `native/mcboard.c:62-66`, `:754` | Low–Medium (6 % busy) | S | Low | High on cost; gain not visible in whole-process CPU |
+| F4 | `now_us()` uses `CLOCK_MONOTONIC`, which on macOS takes a slow `gettimeofday` path; MMIO writes read the clock even when they don't need it | `src/mcboard.c:62-66`, `:754` | Low–Medium (6 % busy) | S | Low | High on cost; gain not visible in whole-process CPU |
 | F5 | Unicorn looks up the memory region on every slow-path access | `vendor/unicorn/qemu/accel/tcg/cputlb.c` (`load_helper`, `store_helper`: `uc->memory_mapping`) | Low–Medium | M | Medium | Medium |
-| F6 | 1 kHz MIDI pump timer runs even with nothing connected | `native/app/MidiPort.swift:133-136` | Low (~0.5 % of a core) | S | Low | Medium |
-| F8 | A watchdog thread wakes 1,000×/s (8,000×/s with USB audio) just to end CPU slices, even while the board sleeps | `native/mcboard.c:1622-1629` (`watchdog_main`) | Medium for battery (~1/7 of all wakeups), low for CPU % | M | Medium | Medium |
-| F7 | Every LED or screen change re-evaluates the whole `PanelView` | `native/app/PanelView.swift:83`, `native/app/Board.swift:41-42` | Unknown, probably low | S–M | Low | Low (not measured while playing) |
-| N1 | *Not a problem:* the 12 kHz panel scan | `native/mcboard.c:284-297` | — | — | — | Medium |
+| F6 | 1 kHz MIDI pump timer runs even with nothing connected | `app/MidiPort.swift:133-136` | Low (~0.5 % of a core) | S | Low | Medium |
+| F8 | A watchdog thread wakes 1,000×/s (8,000×/s with USB audio) just to end CPU slices, even while the board sleeps | `src/mcboard.c:1622-1629` (`watchdog_main`) | Medium for battery (~1/7 of all wakeups), low for CPU % | M | Medium | Medium |
+| F7 | Every LED or screen change re-evaluates the whole `PanelView` | `app/PanelView.swift:83`, `app/Board.swift:41-42` | Unknown, probably low | S–M | Low | Low (not measured while playing) |
+| N1 | *Not a problem:* the 12 kHz panel scan | `src/mcboard.c:284-297` | — | — | — | Medium |
 
 ### F1: DMA copies through the slowest API, 4 bytes at a time
 

@@ -1,6 +1,6 @@
 // Checks of the OS file decoder (mcfirmware.c) with files made up here: each way a file can be wrong gets its own
 // message, and a good transport around a container that is not OS 1.13 is refused by version. No Elektron data is
-// needed, so this runs anywhere (ok/FAIL). With the real file next to the repository (../model-cycles_OS1.13.syx, or
+// needed, so this runs anywhere (ok/FAIL). With the real file in the repository root (model-cycles_OS1.13.syx, or
 // the path given), it also checks that it installs.
 //   mcfirmware_test [model-cycles_OS1.13.syx]
 // It includes mcfirmware.c to reach its checksum and packing rules.
@@ -139,7 +139,7 @@ int main(int argc, char **argv) {
     check(mcf_install("/nonexistent/model-cycles_OS1.13.syx", "/tmp", err, sizeof err) != 0 && strstr(err, "Could not open"),
           "install: a file that is not there", err);
 
-    const char *real = argc > 1 ? argv[1] : "../model-cycles_OS1.13.syx";
+    const char *real = argc > 1 ? argv[1] : "model-cycles_OS1.13.syx";
     FILE *rf = fopen(real, "rb");
     if (rf) {
         fseek(rf, 0, SEEK_END); size_t n = (size_t)ftell(rf); fseek(rf, 0, SEEK_SET);

@@ -15,9 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Build (Unicorn, tools, app; no firmware)
-        run: native/build.sh
+        run: ./build.sh
       - name: Checks that need no firmware
-        run: native/test.sh
+        run: ./test.sh
       - name: Logs
         if: failure()
-        run: tail -n 60 native/build/*.log
+        run: tail -n 60 build/*.log

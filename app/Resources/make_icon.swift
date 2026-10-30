@@ -1,5 +1,5 @@
 // Draws the app icon: six pads on spokes around a knob (six tracks, one wheel), in the panel's colours.
-//   swift app/make_icon.swift app/AppIcon.icns
+//   swift app/Resources/make_icon.swift app/Resources/AppIcon.icns
 // Renders every size an .icns needs into a temporary .iconset and runs iconutil on it.
 import AppKit
 

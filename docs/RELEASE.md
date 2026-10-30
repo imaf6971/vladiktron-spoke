@@ -50,7 +50,7 @@ Done (2026-10-27): Unicorn is vendored in `vendor/unicorn` (2.1.4 with this proj
 says what changed), so the build downloads nothing and needs only CMake and the Xcode command line tools: no git,
 Python or Ninja. The app is a Swift package (`Package.swift`: the C board as module `MCBoard`, the SwiftUI app as an
 executable target); `build.sh` builds Unicorn with CMake, runs `swift build`, wraps the bundle and signs it with the
-hardened runtime and `app/Spoke.entitlements` (`com.apple.security.cs.allow-jit`, and
+hardened runtime and `app/Resources/Spoke.entitlements` (`com.apple.security.cs.allow-jit`, and
 `com.apple.security.device.audio-input`, which the hardened runtime needs for the USB Audio input). Checked with an
 ad hoc signature: the OS boots and plays with no underruns, and quits cleanly. Signed without `allow-jit`, Unicorn
 stops at start-up ("Could not allocate dynamic translator buffer"), so the entitlement is what makes it work. CPU
